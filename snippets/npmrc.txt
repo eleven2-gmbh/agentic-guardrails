@@ -1,0 +1,5 @@
+# >>> package protection (agentic-guardrails/install.sh)
+min-release-age=7
+strict-allow-scripts=true
+allow-git=root
+# <<< package protection

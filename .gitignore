@@ -1,0 +1,6 @@
+# Your configuration and what build.py generates from it stay out of the product
+# repository: keep them in a folder of your own and use --config DIR.
+/config/
+/policy.json
+/managed-settings.json
+__pycache__/

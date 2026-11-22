@@ -1,0 +1,8 @@
+# >>> Claude-Code-Sandbox (agentic-guardrails)
+# Only in the sandbox: ssh through the sandbox proxy (checks the host list),
+# keys only through the own agent, the key file stays unreadable.
+Match exec "/usr/bin/printenv SANDBOX_RUNTIME >/dev/null"
+    ProxyCommand /opt/homebrew/opt/python@3.14/bin/python3.14 -I "/Library/Application Support/ClaudeCode/bin/ssh-proxy.py" %h %p
+    IdentityAgent ~/.ssh-agent/agent.sock
+    ControlMaster no
+# <<< Claude-Code-Sandbox

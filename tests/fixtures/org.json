@@ -1,0 +1,75 @@
+{
+  "note": [
+    "Invented organisation for tests/test_guard.py, merged over the real baseline.json."
+  ],
+  "requires_baseline": ">=1.0 <2",
+  "set": {
+    "organization.name": "example-org",
+    "organization.person": "Dev Example",
+    "organization.description": "an example organisation",
+    "organization.primary_use": "software development",
+    "organization.source_control": [
+      "github.com account example-user"
+    ],
+    "organization.remote_targets": "web servers of the example organisation",
+    "ssh.search_domain": "example.com"
+  },
+  "add": {
+    "domains.own": [
+      {
+        "domain": "example.com",
+        "wildcard": true,
+        "purposes": [
+          "network",
+          "webfetch",
+          "trusted"
+        ]
+      },
+      {
+        "domain": "example.org",
+        "wildcard": true,
+        "purposes": [
+          "network",
+          "webfetch",
+          "trusted"
+        ]
+      },
+      {
+        "domain": "example.net",
+        "wildcard": true,
+        "purposes": [
+          "network",
+          "webfetch",
+          "trusted"
+        ]
+      }
+    ],
+    "ssh.hosts": [
+      {
+        "host": "web01",
+        "role": "web",
+        "note": "short name under example.com"
+      },
+      {
+        "host": "web02",
+        "role": "web"
+      },
+      {
+        "host": "web03",
+        "role": "web"
+      },
+      {
+        "host": "mail",
+        "role": "mail"
+      },
+      {
+        "host": "srv01.example.org",
+        "role": "web"
+      },
+      {
+        "host": "meet.example.org",
+        "role": "jitsi"
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "note": [
+    "Example organisation layer. Copy to config/org.json and edit.",
+    "set: values without a security direction. add: facts. See README."
+  ],
+  "requires_baseline": ">=1.0 <2",
+  "set": {
+    "organization.name": "example-org",
+    "organization.person": "Dev Example",
+    "organization.description": "a small software company",
+    "organization.primary_use": "software development and operating own servers",
+    "organization.source_control": [
+      "github.com organisation example-org"
+    ],
+    "organization.remote_targets": "web servers and the customer portal",
+    "ssh.search_domain": "example.com"
+  },
+  "add": {
+    "domains.own": [
+      {
+        "domain": "example.com",
+        "wildcard": true,
+        "purposes": [
+          "network",
+          "webfetch",
+          "trusted"
+        ]
+      }
+    ],
+    "ssh.hosts": [
+      {
+        "host": "web01",
+        "role": "web",
+        "note": "short name under example.com"
+      },
+      {
+        "host": "db01.example.com",
+        "role": "database"
+      }
+    ],
+    "domains.documentation": [
+      "docs.example-framework.dev"
+    ]
+  },
+  "tighten": {
+    "data_classes.personal_files.patterns": [
+      {
+        "id": "personal.app-audit",
+        "pattern": "(^|/)audit[^/]*\\.log$"
+      }
+    ]
+  }
+}

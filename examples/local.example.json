@@ -1,0 +1,32 @@
+{
+  "note": [
+    "Example machine layer. Copy to config/local.<short host name>.json and edit.",
+    "An exception needs an id from baseline.json, a reason and an expiry date."
+  ],
+  "requires_baseline": ">=1.0 <2",
+  "set": {
+    "install.launchagent_label": "com.example.claude-ssh-agent",
+    "patch_scan.root": "~/code"
+  },
+  "add": {
+    "working_directories.paths": [
+      "/Users/dev/code/website",
+      "/Users/dev/code/api"
+    ],
+    "patch_scan.projects": [
+      "website",
+      "api"
+    ],
+    "sandbox.allow_unix_sockets": [
+      "~/.ssh-agent/agent.sock"
+    ]
+  },
+  "exceptions": [
+    {
+      "id": "personal.mail-log",
+      "action": "off",
+      "reason": "this machine never reads mail servers",
+      "expires": "2099-12-31"
+    }
+  ]
+}

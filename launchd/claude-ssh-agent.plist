@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- ssh-agent with a fixed socket for the Claude Code sandbox.
+     The sandbox may only reach this socket (allowUnixSockets); the key file
+     itself stays unreadable for sandboxed commands.
+     id_ed25519 has a passphrase; ssh-add reads it from the login keychain
+     (stored once with: ssh-add --apple-use-keychain). docs/design-notes.md, 10. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>D="$HOME/.ssh-agent"; S="$D/agent.sock"; mkdir -p -m 700 "$D"; rm -f "$S"; /usr/bin/ssh-agent -D -a "$S" &amp; P=$!; i=0; while [ ! -S "$S" ] &amp;&amp; [ $i -lt 20 ]; do sleep 0.25; i=$((i+1)); done; K="$HOME/.ssh/id_ed25519"; [ -f "$K" ] &amp;&amp; SSH_AUTH_SOCK="$S" /usr/bin/ssh-add -q --apple-use-keychain "$K" &lt;/dev/null; wait $P</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardErrorPath</key>
+  <string>/tmp/@LABEL@.log</string>
+</dict>
+</plist>

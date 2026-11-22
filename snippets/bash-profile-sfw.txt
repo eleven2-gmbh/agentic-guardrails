@@ -1,0 +1,14 @@
+# >>> Socket Firewall (agentic-guardrails)
+# npm, pnpm, yarn, pip, pip3 and uv run through sfw automatically, the commands stay the same.
+# Check: `type npm` shows the function. Bypass for one call: `command npm …`.
+# Applies only in interactive shells (scripts, Makefiles and IDE tasks do not read ~/.bash_profile).
+if command -v sfw >/dev/null 2>&1; then
+  export SFW_TELEMETRY_DISABLED=true
+  npm()  { sfw npm  "$@"; }
+  pnpm() { sfw pnpm "$@"; }
+  yarn() { sfw yarn "$@"; }
+  pip()  { sfw pip  "$@"; }
+  pip3() { sfw pip3 "$@"; }
+  uv()   { sfw uv   "$@"; }
+fi
+# <<< Socket Firewall

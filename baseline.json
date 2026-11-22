@@ -1,0 +1,400 @@
+{
+  "note": [
+    "The product's baseline: rules that make sense on every developer machine. Do not",
+    "edit it for one organisation or machine; put that into config/org.json or",
+    "config/local.<host>.json, which may add facts, tighten rules and, with a reason and",
+    "an expiry date, make exceptions (docs/design-notes.md, 8). build.py merges the three files",
+    "into policy.json, which hooks/guard.py reads, and managed-settings.json.",
+    "What does NOT belong here: what counts as a read-only command, which options of",
+    "find/sed/tar start a program, how a dependency is recognised in a manifest. That",
+    "knowledge is about how programs behave and lives in hooks/guard.py."
+  ],
+  "baseline_version": "1.0.0",
+  "locked": [
+    "secret.env",
+    "secret.ssh-key",
+    "credentials.read_deny:~/.ssh/id_*",
+    "package_protection.require_sfw"
+  ],
+  "policy": {
+    "organization": {
+      "name": "",
+      "person": "",
+      "description": "",
+      "primary_use": "",
+      "source_control": [],
+      "remote_targets": ""
+    },
+    "domains": {
+      "note": [
+        "One entry per own domain (added by the organisation layer), with the purposes it",
+        "serves. build.py fans these out into sandbox.network.allowedDomains (purpose",
+        "'network'), the WebFetch list in the hook ('webfetch') and the auto-mode text",
+        "('trusted'), so the three lists cannot drift apart."
+      ],
+      "own": [],
+      "package_registries": [
+        "registry.npmjs.org",
+        "registry.yarnpkg.com",
+        "nodejs.org",
+        "api.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "pypistats.org",
+        "repo.packagist.org",
+        "packagist.org",
+        "getcomposer.org"
+      ],
+      "security_sources": [
+        "api.deps.dev",
+        "api.osv.dev",
+        "api.securityscorecards.dev"
+      ],
+      "code_hosts": [
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "gitlab.com"
+      ],
+      "os_packages": [
+        "ppa.launchpadcontent.net",
+        "packages.sury.org",
+        "deb.debian.org",
+        "security.debian.org",
+        "archive.ubuntu.com",
+        "security.ubuntu.com",
+        "download.jitsi.org"
+      ],
+      "documentation": [
+        "code.claude.com",
+        "docs.claude.com",
+        "docs.anthropic.com",
+        "platform.claude.com",
+        "developer.mozilla.org",
+        "docs.npmjs.com",
+        "www.npmjs.com",
+        "www.php.net",
+        "php.net",
+        "laravel.com",
+        "vuejs.org",
+        "angular.dev",
+        "nextjs.org",
+        "docs.astro.build",
+        "ionicframework.com",
+        "capacitorjs.com",
+        "docs.python.org",
+        "go.dev",
+        "pkg.go.dev",
+        "docs.docker.com",
+        "developer.hashicorp.com",
+        "registry.terraform.io",
+        "learn.microsoft.com",
+        "docs.aws.amazon.com",
+        "docs.hetzner.com",
+        "docs.hetzner.cloud",
+        "jitsi.github.io",
+        "nginx.org",
+        "httpd.apache.org",
+        "man7.org",
+        "www.openssh.com",
+        "docs.gitlab.com",
+        "docs.github.com",
+        "owasp.org",
+        "genai.owasp.org",
+        "osv.dev",
+        "deps.dev",
+        "socket.dev",
+        "securityscorecards.dev",
+        "nvd.nist.gov",
+        "www.cve.org",
+        "www.gesetze-im-internet.de",
+        "gesetze-im-internet.de",
+        "eur-lex.europa.eu"
+      ]
+    },
+    "ssh": {
+      "note": [
+        "Design notes 3: reading on these hosts is free, every change asks. Design notes 2 adds",
+        "that reads which send data out, or read secrets or personal data, ask as well.",
+        "A new server goes in known_hosts AND here."
+      ],
+      "search_domain": "",
+      "hosts": []
+    },
+    "working_directories": {
+      "note": [
+        "Become managed additionalDirectories (design notes, 9). guard.py uses the list",
+        "to decide where a git network command may run without a question (design notes, 4):",
+        "those commands run outside the sandbox, and Claude's temp folders are not on it."
+      ],
+      "paths": []
+    },
+    "patch_scan": {
+      "note": [
+        "Projects scripts/patch-scan.sh checks (/patch-check), relative to root.",
+        "Read only by the script, not by the hook."
+      ],
+      "root": "~/Documents",
+      "projects": []
+    },
+    "data_classes": {
+      "note": [
+        "Decided 2026-11-20. Everything read on a server goes to the model provider, so",
+        "the read/write split alone was not enough: the auto-mode text said credentials",
+        "and personal data must not leave the servers, while the hook let them be read.",
+        "This is the rule both now follow. Only the lists are configurable; how a command",
+        "is recognised stays in guard.py.",
+        "",
+        "secret_files: real key and credential files. A certificate is public, so",
+        "cert.pem and fullchain.pem stay free; a .pem counts only when its name or folder",
+        "says private. Other config files with passwords in them (Prosody, Jitsi,",
+        "wp-config.php) stay free on purpose: they are needed for troubleshooting.",
+        "",
+        "personal_files: the logs with the most personal data. Error logs, journalctl,",
+        "syslog and Jitsi logs stay free, so troubleshooting works without questions."
+      ],
+      "secret_files": {
+        "ask": true,
+        "patterns": [
+          {
+            "id": "secret.env",
+            "pattern": "(^|/)\\.env($|[./])"
+          },
+          {
+            "id": "secret.key-files",
+            "pattern": "\\.(key|p12|pfx|jks|keystore|ppk|asc|gpg)$"
+          },
+          {
+            "id": "secret.private-pem",
+            "pattern": "(^|/)[^/]*(privkey|private|secret|[-_.]key)[^/]*\\.pem$"
+          },
+          {
+            "id": "secret.private-dir-pem",
+            "pattern": "/private/[^/]*\\.pem$"
+          },
+          {
+            "id": "secret.shadow",
+            "pattern": "(^|/)(shadow|gshadow|sudoers)$"
+          },
+          {
+            "id": "secret.my-cnf",
+            "pattern": "(^|/)\\.?my\\.cnf$"
+          },
+          {
+            "id": "secret.debian-cnf",
+            "pattern": "(^|/)debian\\.cnf$"
+          },
+          {
+            "id": "secret.ssh-key",
+            "pattern": "(^|/)id_(rsa|dsa|ecdsa|ed25519)$"
+          },
+          {
+            "id": "secret.dotfiles",
+            "pattern": "(^|/)\\.(pgpass|htpasswd|netrc|git-credentials)$"
+          }
+        ]
+      },
+      "personal_files": {
+        "ask": true,
+        "patterns": [
+          {
+            "id": "personal.access-log",
+            "pattern": "access[._-]?log"
+          },
+          {
+            "id": "personal.mail-log",
+            "pattern": "(^|/)mail\\.(log|info|warn|err)"
+          },
+          {
+            "id": "personal.auth-log",
+            "pattern": "(^|/)auth\\.log"
+          },
+          {
+            "id": "personal.secure-log",
+            "pattern": "(^|/)secure(\\.\\d+|\\.gz)?$"
+          },
+          {
+            "id": "personal.login-records",
+            "pattern": "(^|/)(wtmp|btmp|lastlog)(\\.\\d+)?$"
+          },
+          {
+            "id": "personal.mailserver-log",
+            "pattern": "(^|/)(exim|dovecot|postfix)[^/]*\\.log"
+          }
+        ]
+      }
+    },
+    "package_protection": {
+      "note": [
+        "Design notes 6. require_sfw: installs only run through Socket Firewall.",
+        "sfw_works_in_sandbox: sfw 1.16.0 ignores the sandbox proxy (tested 2026-11-15),",
+        "so while this is false an install in the sandbox is denied right away and handed",
+        "to the user's terminal. Set it to true once sfw works there."
+      ],
+      "require_sfw": true,
+      "sfw_works_in_sandbox": false,
+      "min_release_age_days": 7,
+      "env": {
+        "npm_config_min_release_age": "7",
+        "npm_config_strict_allow_scripts": "true",
+        "npm_config_allow_git": "root",
+        "npm_config_yes": "false",
+        "PIP_UPLOADED_PRIOR_TO": "P7D",
+        "PIP_ONLY_BINARY": ":all:",
+        "PIP_REQUIRE_VIRTUALENV": "true",
+        "UV_EXCLUDE_NEWER": "P7D",
+        "COMPOSER_POLICY_COOLDOWN_PERIOD": "7 days"
+      }
+    },
+    "credentials": {
+      "note": "Paths and variables the sandbox keeps away from every command.",
+      "files": [
+        "~/.ssh/id_ed25519",
+        "~/.aws",
+        "~/.azure",
+        "~/.config/gh",
+        "~/.config/hcloud",
+        "~/.docker/config.json",
+        "~/.kube",
+        "~/.git-credentials",
+        "~/.netrc",
+        "~/Library/Keychains"
+      ],
+      "read_deny": [
+        "~/.ssh/id_*",
+        "~/.aws/**",
+        "~/.azure/**",
+        "~/.config/gh/**",
+        "~/.config/hcloud/**",
+        "~/.docker/config.json",
+        "~/.kube/**",
+        "~/.git-credentials",
+        "~/.netrc",
+        "~/Library/Keychains/**"
+      ],
+      "env_vars": [
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "GITLAB_TOKEN",
+        "NPM_TOKEN",
+        "HCLOUD_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "INFLUX_TOKEN",
+        "INFLUXDB_TOKEN"
+      ]
+    },
+    "always_ask": {
+      "note": [
+        "Tools that always ask, whatever the hook says, and that run outside the sandbox",
+        "(they need the keychain or a local socket). Both lists are generated from this."
+      ],
+      "tools": [
+        "hcloud",
+        "az",
+        "aws",
+        "terraform",
+        "kubectl",
+        "docker",
+        "brew",
+        "composer"
+      ],
+      "extra_ask": [
+        "Read(**/.env)",
+        "Read(**/.env.*)",
+        "Bash(gh gist *)"
+      ],
+      "git_network_outside_sandbox": [
+        "git push",
+        "git pull",
+        "git fetch",
+        "git clone",
+        "git ls-remote",
+        "git submodule"
+      ],
+      "gh_outside_sandbox": true
+    },
+    "sandbox": {
+      "note": "Folders package managers need inside the sandbox. build.py expands a leading ~ to the home of the user who builds.",
+      "allow_read": [
+        "~/.nvm",
+        "~/.npm",
+        "~/.npmrc",
+        "~/Library/pnpm",
+        "~/Library/Caches/pnpm",
+        "~/Library/Preferences/pnpm",
+        "~/Library/Caches/pip",
+        "~/.cache/node",
+        "~/.cache/prisma",
+        "~/.composer",
+        "~/.ssh/config",
+        "~/.ssh/known_hosts"
+      ],
+      "allow_write": [
+        "~/.npm",
+        "~/Library/pnpm",
+        "~/Library/Caches/pnpm",
+        "~/Library/Caches/pip",
+        "~/.cache/node",
+        "~/.cache/prisma"
+      ],
+      "allow_unix_sockets": []
+    },
+    "logging": {
+      "note": [
+        "Decision log of the hook (design notes, 1). Logged are ask and deny, plus silent ssh",
+        "and git network calls, so the rules can be tuned from real sessions. The command",
+        "is cut to max_command_chars and obvious secrets are redacted."
+      ],
+      "enabled": true,
+      "path": "~/Library/Logs/claude-guard/decisions.jsonl",
+      "max_command_chars": 300,
+      "max_bytes": 5242880,
+      "keep_files": 3,
+      "log_silent_tools": [
+        "ssh",
+        "git-network"
+      ]
+    },
+    "shadow_rules": {
+      "note": [
+        "Rule ids listed here only log 'would have asked' instead of asking. For trying",
+        "out a new rule before it goes live; the fixes of design notes 2 are live right away",
+        "(decided 2026-11-20). Ids are the ones in the decision log."
+      ],
+      "ids": []
+    },
+    "webfetch": {
+      "note": "Hosts the WebFetch tool may use without a question; own domains are added.",
+      "extra_hosts": [
+        "github.com",
+        "raw.githubusercontent.com",
+        "gitlab.com"
+      ]
+    },
+    "claude_code": {
+      "note": [
+        "Design notes 9. lock_lower_scopes: managed settings are the only source of permission",
+        "rules and sandbox read paths (allowManagedPermissionRulesOnly,",
+        "allowManagedReadPathsOnly). Rules from ~/.claude/settings.json, project settings,",
+        "/permissions and 'Yes, and don't ask again' then no longer apply; deny and ask rules",
+        "a project brings along must be added here. Check first with ./build.py --audit.",
+        "working_directories become permissions.additionalDirectories in managed settings.",
+        "required_minimum_version: the oldest Claude Code that knows every key we set",
+        "(blockWritesOutsideWorkingDirectories needs 2.1.314)."
+      ],
+      "lock_lower_scopes": true,
+      "required_minimum_version": "2.1.314"
+    },
+    "install": {
+      "note": [
+        "Names install.sh and uninstall.sh use on this machine. The label names the LaunchAgent",
+        "of the ssh-agent (design notes, 10); to change it, run uninstall.sh first."
+      ],
+      "launchagent_label": ""
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "note": [
+    "Invented machine for tests/test_guard.py. The test replaces the working",
+    "directories and the log path at run time."
+  ],
+  "requires_baseline": ">=1.0 <2",
+  "set": {
+    "install.launchagent_label": "org.example.claude-ssh-agent",
+    "logging.path": "/nonexistent/decisions.jsonl"
+  },
+  "add": {
+    "working_directories.paths": [
+      "/nonexistent/set-by-test"
+    ],
+    "sandbox.allow_unix_sockets": [
+      "/nonexistent/agent.sock"
+    ]
+  }
+}
