@@ -56,8 +56,11 @@ Asks the user before:
 
   * edits of a project's .claude/settings*.json (Edit/Write or shell) that open a
     folder outside the project, see check_settings_edit
+  * every Edit/Write of Claude's user settings (~/.claude, $CLAUDE_CONFIG_DIR): the
+    managed lock leaves autoMode, hooks and env there in effect
 
-At SessionStart: warns (no block) when the project's settings open such a folder.
+At SessionStart: warns (no block) when the project's settings open such a folder,
+when managed-settings.d exists, and when the user settings carry autoMode entries.
 
 Denies (Claude must retry correctly):
   * npm/pnpm/yarn/pip/uv installs that do not run through Socket Firewall
@@ -2166,8 +2169,41 @@ def outside_dirs(obj, root):
     return bad
 
 
+# Claude's own user settings. allowManagedPermissionRulesOnly drops permission rules from
+# them, but not the rest: autoMode (an allow entry there can lift a managed soft_deny in
+# the classifier), hooks, env, apiKeyHelper. The sandbox keeps shell writes out; for the
+# file tools this hook is the only check, so every change asks, whatever it contains.
+def user_config_dirs():
+    dirs = [os.path.expanduser("~/.claude")]
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        dirs.append(os.path.expanduser(os.environ["CLAUDE_CONFIG_DIR"]))
+    return {os.path.realpath(d) for d in dirs}
+
+
+def user_settings_files():
+    return [os.path.join(d, n) for d in sorted(user_config_dirs()) for n in SETTINGS_FILES]
+
+
+def is_user_settings(path):
+    """True for ~/.claude/settings(.local).json, also via a symlinked file or folder."""
+    if not path:
+        return False
+    p = os.path.abspath(os.path.expanduser(path))
+    dirs = user_config_dirs()
+    for q in (p, os.path.realpath(p)):
+        if os.path.basename(q) in SETTINGS_FILES \
+                and os.path.realpath(os.path.dirname(q)) in dirs:
+            return True
+    return False
+
+
 def check_settings_edit(tool, inp):
     path = inp.get("file_path") or ""
+    if is_user_settings(path):
+        ask(f"Claude Code user settings ({path}): they apply to every session, and the "
+            "managed lock covers only permission rules, not autoMode, hooks or env. "
+            "Please check the change.", "user-settings")
+        return
     if not is_settings_file(path):
         return
     root = os.path.dirname(os.path.dirname(os.path.abspath(path)))
@@ -2223,17 +2259,53 @@ def session_start(data):
     if found:
         msgs.append("Project settings open folders outside the project: "
                     + " | ".join(found))
+    auto = user_auto_mode_entries()
+    if auto:
+        msgs.append("User settings add their own auto-mode rules: " + " | ".join(auto)
+                    + ". The managed lock does not cover them; an allow entry can lift a "
+                    "managed soft_deny. Please check they are yours (docs/design-notes.md, 11).")
     if msgs:
         session_warn(" ".join(msgs))
 
 
+def user_auto_mode_entries():
+    """Per user settings file, the autoMode keys with entries of their own ("$defaults"
+    alone does not count): e.g. '~/.claude/settings.json: allow 1, soft_deny 2'."""
+    out = []
+    for p in user_settings_files():
+        if not os.path.isfile(p):
+            continue
+        try:
+            obj = json.loads(read_text(p) or "{}")
+        except ValueError:
+            out.append(f"{p} (not valid JSON, cannot be checked)")
+            continue
+        am = obj.get("autoMode") if isinstance(obj, dict) else None
+        if am is None:
+            continue
+        if not isinstance(am, dict):
+            out.append(f"{p}: autoMode ({type(am).__name__})")
+            continue
+        parts = []
+        for k, v in sorted(am.items()):
+            if isinstance(v, list):
+                n = len([e for e in v if e != "$defaults"])
+                if n or "$defaults" not in v:
+                    parts.append(f"{k} {n}")
+            else:
+                parts.append(f"{k}={json.dumps(v)}")
+        if parts:
+            out.append(f"{p}: {', '.join(parts)}")
+    return out
+
+
 def session_warn(msg):
     print(json.dumps({
-        "systemMessage": "Sicherheits-Hook: " + msg,
+        "systemMessage": "Security hook: " + msg,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": "Sicherheits-Hook: " + msg + " Point this out to the user at the start "
-                                 "and access these folders only after they confirm.",
+            "additionalContext": "Security hook: " + msg + " Point this out to the user at the start "
+                                 "and rely on the settings named here only after they confirm.",
         },
     }))
 

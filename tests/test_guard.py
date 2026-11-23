@@ -541,6 +541,17 @@ def wr(root, obj, name="settings.json"):
 
 
 set_settings(G_A, settings_obj(["./docs"]))
+# user settings: a config dir of its own (CLAUDE_CONFIG_DIR, inherited by the hook) and a
+# symlink to it; SessionStart runs with a home of its own, so the real ~/.claude never counts
+CFG = os.path.join(GRP, "claude-config")
+CFG_LINK = os.path.join(GRP, "config-link")
+FAKE_HOME = os.path.join(GRP, "home")
+os.makedirs(CFG)
+os.makedirs(os.path.join(FAKE_HOME, ".claude"))
+os.symlink(CFG, CFG_LINK)
+os.environ["CLAUDE_CONFIG_DIR"] = CFG
+SESSION_ENV = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+SESSION_ENV["HOME"] = FAKE_HOME
 
 SETTINGS = [
     ("Write", wr(G_A, settings_obj(["./docs"])), "silent"),
@@ -561,6 +572,15 @@ SETTINGS = [
     # a settings.json that is not in .claude/ is not checked here
     ("Write", {"file_path": os.path.join(G_A, "settings.json"),
                "content": json.dumps(settings_obj([OTHER]))}, "silent"),
+    # Claude's user settings ($CLAUDE_CONFIG_DIR, ~/.claude): every change asks
+    ("Write", {"file_path": os.path.join(CFG, "settings.json"), "content": "{}"}, "ask"),
+    ("Write", {"file_path": os.path.join(CFG, "settings.local.json"), "content": "{}"}, "ask"),
+    ("Edit", edit(os.path.join(CFG, "settings.json"), '"x"', '"y"'), "ask"),
+    ("Write", {"file_path": os.path.join(CFG_LINK, "settings.json"), "content": "{}"}, "ask"),
+    ("Write", {"file_path": "~/.claude/settings.json", "content": "{}"}, "ask"),
+    ("Write", {"file_path": os.path.expanduser("~/.claude/settings.json"),
+               "content": "{}"}, "ask"),
+    ("Write", {"file_path": os.path.join(CFG, "keybindings.json"), "content": "{}"}, "silent"),
 ]
 SETTINGS_BASH = [
     (f"echo '{{}}' > {sfile(G_A)}", "ask"),
@@ -574,6 +594,17 @@ SESSIONS = [
     (OTHER, settings_obj([G_A]), True),
     (OTHER, settings_obj(read=["~/"]), True),
     (OTHER, {"permissions": {"allow": ["Bash(ls)"]}}, False),
+]
+# session start: autoMode in ~/.claude/settings.json (None: no file), warning expected
+USER_AUTO = [
+    (None, False),
+    ({"env": {"A": "1"}}, False),
+    ({"autoMode": {"environment": ["$defaults"]}}, False),
+    ({"autoMode": {"environment": ["$defaults", "Org: x"]}}, True),
+    ({"autoMode": {"allow": ["$defaults", "anything goes"]}}, True),
+    ({"autoMode": {"soft_deny": []}}, True),          # replaces the defaults
+    ({"autoMode": {"classifyAllShell": True}}, True),
+    ({"autoMode": "x"}, True),
 ]
 
 fails = 0
@@ -644,18 +675,37 @@ for tool, inp, want in SETTINGS:
 for cmd, want in SETTINGS_BASH:
     run(f"Bash {cmd[-60:]}", {"tool_name": "Bash", "cwd": G_A, "tool_input": {"command": cmd}},
         want)
+def session_run(cwd):
+    return subprocess.run([sys.executable, "-I", GUARD, "--policy", POLICY],
+                          capture_output=True, text=True, env=SESSION_ENV,
+                          input=json.dumps({"hook_event_name": "SessionStart", "cwd": cwd,
+                                            "source": "startup"})).stdout.strip()
+
+
 for cwd, obj, warn in SESSIONS:
     os.makedirs(cwd, exist_ok=True)
     if obj is not None:
         set_settings(cwd, obj)
-    out = subprocess.run([sys.executable, "-I", GUARD, "--policy", POLICY],
-                         capture_output=True, text=True,
-                         input=json.dumps({"hook_event_name": "SessionStart", "cwd": cwd,
-                                           "source": "startup"})).stdout.strip()
+    out = session_run(cwd)
     got = bool(out) and "systemMessage" in json.loads(out)
     fails += got != warn
     if verbose or got != warn:
         print(f"{'ok  ' if got == warn else 'FAIL'} SessionStart {os.path.relpath(cwd, GRP):20} "
+              f"-> {'warning' if got else 'silent'}")
+USER_FILE = os.path.join(FAKE_HOME, ".claude", "settings.json")
+for obj, warn in USER_AUTO:
+    if obj is None:
+        if os.path.exists(USER_FILE):
+            os.remove(USER_FILE)
+    else:
+        with open(USER_FILE, "w") as f:
+            json.dump(obj, f)
+    out = session_run(G_A)
+    msg = json.loads(out)["systemMessage"] if out else ""
+    got = "auto-mode rules" in msg
+    fails += got != warn
+    if verbose or got != warn:
+        print(f"{'ok  ' if got == warn else 'FAIL'} SessionStart user {json.dumps(obj)[:50]:50} "
               f"-> {'warning' if got else 'silent'}")
 got, _ = decide("{kaputt")
 fails += got != "ask"
@@ -758,6 +808,8 @@ import io
 spec = importlib.util.spec_from_file_location("guard_mod", GUARD)
 guard_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard_mod)
+_empty_cfg = tempfile.mkdtemp(prefix="guardcfg-")
+guard_mod.user_config_dirs = lambda: {os.path.realpath(_empty_cfg)}  # not the real ~/.claude
 
 
 def session_output(dropin):
@@ -785,7 +837,8 @@ shutil.rmtree(PROJ)
 shutil.rmtree(WORK_A)
 shutil.rmtree(WORK_B)
 shutil.rmtree(GRP)
+shutil.rmtree(_empty_cfg)
 total = 2 * len(BASH) + len(FILES) + len(WEB) + len(SETTINGS) + len(SETTINGS_BASH) \
-    + len(SESSIONS) + 1 + EXTRA
+    + len(SESSIONS) + len(USER_AUTO) + 1 + EXTRA
 print(f"{total} cases, FAILURES: {fails}")
 sys.exit(1 if fails else 0)

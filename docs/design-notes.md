@@ -114,6 +114,15 @@ ask rules a project brings along stop applying too and must go into the policy; 
 ask again" has no effect; every lasting permission needs an install. `build.py --audit`
 lists what the lower scopes contain before the lock goes live.
 
+The lock covers permission rules only. `autoMode` in the user settings still reaches the
+classifier, merged with the managed entries (tested on 2.1.325), and an `allow` entry
+there can lift a managed `soft_deny`; so can user-level hooks and `env`. Project files
+cannot carry `autoMode`. The sandbox keeps shell writes out of `~/.claude/settings.json`,
+the file tools are not covered by it: the hook asks on every Edit or Write of
+`settings.json` or `settings.local.json` in `~/.claude` or `$CLAUDE_CONFIG_DIR` (also via
+a symlink), whatever the change. The SessionStart hook warns when the user settings carry
+`autoMode` entries of their own beyond `"$defaults"`.
+
 The drop-in directory `managed-settings.d/` is refused: Claude Code merges it into the
 managed settings with the later file winning for single values, without ids, locks or
 exceptions. The installer stops when it exists, and the SessionStart hook warns.
@@ -136,3 +145,6 @@ agent to the remote host, even for a command that only reads.
 - A layer of Claude Code can fail silently after an update (a hook `ask` was once not
   shown in auto mode). Repeat the acceptance test after every update.
 - Cloud sessions and the Claude chat app are not covered at all.
+- `autoMode`, hooks and `env` in the user settings are outside the managed lock (see 9).
+  Changes by Claude ask and `autoMode` entries are reported at session start, but a
+  change made outside Claude, or approved by mistake, applies until it is noticed.
