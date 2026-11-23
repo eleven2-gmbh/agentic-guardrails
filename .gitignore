@@ -4,3 +4,6 @@
 /policy.json
 /managed-settings.json
 __pycache__/
+
+# macOS Finder metadata
+.DS_Store
