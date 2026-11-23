@@ -6,7 +6,7 @@ every shell command before it runs, and package protection against supply-chain 
 One policy file per layer (product baseline, organisation, machine) is the single source
 for all of it.
 
-Maintained by [eleven2 GmbH](https://www.eleven2.de).
+Maintained by [eleven2 gmbh](https://www.eleven2.de).
 
 ## What it does
 
@@ -103,7 +103,7 @@ again.
 
 ## Licence
 
-Copyright 2026 eleven2 GmbH. Licensed under the Apache License 2.0, see [LICENSE](LICENSE).
+Copyright 2026 eleven2 gmbh. Licensed under the Apache License 2.0, see [LICENSE](LICENSE).
 
 ## Security
 
