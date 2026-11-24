@@ -1,7 +1,23 @@
-# Configuration UI (planned)
+# Configuration UI
 
-Status: planned, not built. The foundation in `build.py` (`--describe`, `--init`,
-`--migrate`, `layer_format`) is in place; see README, *Configure*, and design notes, 8.
+Status: built (`ui/`, `tests/test_ui.py`). It rests on `build.py --describe`, `--init`,
+`--migrate` and `layer_format`; see README, *Configure*, and design notes, 8.
+
+```
+./build.py --ui [--config DIR]   prints http://127.0.0.1:<port>/#token=... ; Ctrl+C stops it
+```
+
+Open the printed address yourself; the UI does not start a browser, so the token never
+appears in another process's command line.
+
+## Files
+
+| Path | Content |
+|---|---|
+| `ui/server.py` | the server and its JSON API; loaded by `build.py --ui` only, the build never imports it |
+| `ui/index.html`, `ui/app.js`, `ui/style.css` | the page; components are render functions (`h()`) |
+| `ui/vendor/vue.runtime.global.prod.js` | Vue 3.5.45, runtime-only build; `VENDOR.md` records source, integrity and SHA-256 |
+| `tests/test_ui.py` | the server tests below |
 
 ## Principles
 
@@ -19,7 +35,7 @@ Status: planned, not built. The foundation in `build.py` (`--describe`, `--init`
 | Part | Choice | Why |
 |---|---|---|
 | Server | Python standard library (`http.server`), started by `./build.py --ui [--config DIR]`, on `/usr/bin/python3` | the product's own runtime, no dependency |
-| Frontend | Vue 3 as one vendored file (`ui/vendor/vue.global.prod.js`), plain HTML and JavaScript, no build step | reactive forms without npm; one file to review and replace |
+| Frontend | Vue 3 as one vendored file (`ui/vendor/vue.runtime.global.prod.js`, the runtime-only build), plain HTML and JavaScript, no build step | reactive forms without npm; one file to review and replace |
 | CSS | own stylesheet, system fonts, CSS variables, light and dark via `prefers-color-scheme` | no third-party CSS |
 | Icons | a few inline SVGs | no icon font |
 
@@ -28,26 +44,38 @@ packages and a bundled Chromium in a supply-chain product), Tauri (Rust crates p
 npm frontend), native SwiftUI (new language, signing), a Vite/TypeScript build with a
 checked-in bundle (an unreadable blob in the repository).
 
-Vendoring Vue: vet it with `/dep-check` first; pin an exact version; record version,
-source URL, SHA-256 and licence (MIT) in `ui/vendor/VENDOR.md`; a test checks the hash.
+Vendoring Vue: vetted with `/dep-check` (2026-11-24); exact version 3.5.45; version,
+source URL, registry integrity, SHA-256 and licence (MIT) in `ui/vendor/VENDOR.md`; a
+test checks the hash.
 
 ## Server security
 
 - Bind to `127.0.0.1` only, on a random free port.
-- A random token (`secrets.token_urlsafe`) in the start URL; the page keeps it and sends
-  it as a header on every API call; requests without it get 403.
+- A random token (`secrets.token_urlsafe`) in the start URL's fragment (`#token=`), so it
+  never travels in a request line or a log; the page keeps it in `sessionStorage`, drops
+  it from the address bar and sends it as `X-Guardrails-Token` on every API call;
+  requests without it get 403. The static files of the page need no token.
+- `POST` and `PUT` need `Content-Type: application/json` (no plain form posts) and at
+  most 1 MiB.
 - Check the `Host` header (`127.0.0.1:<port>` or `localhost:<port>`) against DNS
   rebinding; reject cross-origin requests (`Origin`, `Sec-Fetch-Site`).
 - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self';
-  img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'`. With
-  `vue.global.prod.js` templates must be compiled at runtime, which needs
-  `'unsafe-eval'`; avoid it by writing components as render functions (`h()`), or accept
-  it knowingly and note why.
-- Serve only files from `ui/`; JSON API only for the configuration folder given at start.
+  img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'`, plus
+  `base-uri 'none'; form-action 'none'`. Templates compiled at runtime would need
+  `'unsafe-eval'`; the components are render functions (`h()`) on the runtime-only
+  build, which has no compiler and no `eval` at all. No inline script, no inline style.
+- Serve only files from `ui/` (a fixed list made at start: `.html`, `.js`, `.css`, `.svg`,
+  no symbolic links); JSON API only for the configuration folder given at start. Without
+  `--config` the Folder screen chooses it.
 - Writes go to `org.json` and `local.<host>.json` only, through the same text format
   `build.py` writes (`layer_text`: 2-space indent, key order kept, trailing newline).
   `baseline.json`, `policy.json` and `managed-settings.json` are never written by the UI;
-  the generated files come from `build.py`.
+  the generated files come from `build.py`. A layer that did not change is not written
+  at all, so even a hand-formatted file stays byte-identical. Each write sends the
+  SHA-256 of the text it was based on and is refused (409) if the file changed since;
+  it is written to a temporary file and renamed, never through a symbolic link.
+- A write is checked against what is on disk next to it: `org.json` with every machine
+  layer in the folder, a machine layer with `org.json`. So the folder always builds.
 
 ## Screens
 
@@ -67,17 +95,23 @@ source URL, SHA-256 and licence (MIT) in `ui/vendor/VENDOR.md`; a test checks th
    message names a path. `--diff` of `policy.json` and `managed-settings.json` before
    building; then build. Afterwards show the `install.sh` command to copy.
 
-## Server API (sketch)
+## Server API
 
 | Call | Does |
 |---|---|
 | `GET /api/describe` | `describe()` |
 | `GET /api/layers` | the layer files of the folder, as JSON |
-| `POST /api/check` | layers from the body, merged with `effective()` in a temp folder; errors or the merged policy |
-| `GET /api/migrate` / `POST /api/migrate` | diff and notes / write |
+| `GET /api/state` | folder, host, `product-version`, checkout (tag, clean), install command |
+| `POST /api/folder` | choose the folder (only without `--config`) |
+| `POST /api/check` | layers from the body, merged with `effective()` in a temp folder; errors (with the file and the paths they name) or the merged policy |
+| `GET /api/migrate` / `POST /api/migrate` | `build.py --migrate` / `--migrate --write`, the latter only with `{"confirm": true}` |
 | `POST /api/init` | `init()` |
 | `PUT /api/layers/<file>` | write one layer after a successful check |
-| `POST /api/build` | `build.py` output for the folder (`--diff`, then write) |
+| `POST /api/build` | `build.py --diff`, or with `{"write": true}` the build; then the `install.sh` command |
+
+`--diff`, the build and `--migrate` run `build.py` itself (`/usr/bin/python3 -I`), so the
+page shows the same output as the terminal. Note that `build.py` builds with
+`local.<this machine>.json`; the page says so when another machine layer is open.
 
 ## Tests
 

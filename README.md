@@ -49,7 +49,8 @@ The boundaries are the sandbox, the network allowlist and the root-owned setting
 | `skills/` | `/dep-check` (vet a package before adding it), `/patch-check` |
 | `snippets/` | npm, pip, Composer, ssh and shell configuration the installer adds |
 | `examples/` | an example organisation and machine layer |
-| `tests/` | `test_guard.py` (hook), `test_build.py` (layer merge); tests of your own configuration live in your folder |
+| `ui/` | the optional configuration UI (`build.py --ui`), Vue vendored in `ui/vendor/` |
+| `tests/` | `test_guard.py` (hook), `test_build.py` (layer merge), `test_ui.py` (UI server); tests of your own configuration live in your folder |
 
 ## Configure
 
@@ -83,11 +84,17 @@ a baseline version outside the layer's `requires_baseline`.
 ```
 ./build.py --config ~/my-guardrails --diff   # what would change
 ./build.py --config ~/my-guardrails          # write policy.json and managed-settings.json there
-/usr/bin/python3 -I tests/test_guard.py && /usr/bin/python3 -I tests/test_build.py
+/usr/bin/python3 -I tests/test_guard.py && /usr/bin/python3 -I tests/test_build.py \
+  && /usr/bin/python3 -I tests/test_ui.py
 ```
 
 `./build.py --describe` prints these rules as JSON (every path, its type, the stricter
 direction, the ids an exception may name), for an editor or a configuration tool.
+
+Optional: `./build.py --ui --config ~/my-guardrails` starts a local configuration UI on
+`127.0.0.1` (forms from `--describe`, every change checked by `build.py`, then `--diff`
+and the build). It writes only `org.json` and `local.<host>.json` and never runs
+`install.sh`; see [docs/config-ui.md](docs/config-ui.md).
 
 ### Updating the product
 

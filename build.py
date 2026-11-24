@@ -26,6 +26,9 @@ Run after every change to one of them:
                                brings the layers in <config> to the current layer_format and
                                to ids and paths the baseline renamed; shows a diff, writes
                                only with --write
+    ./build.py --ui [--config DIR]
+                               the optional configuration UI on 127.0.0.1 (ui/, docs/config-ui.md);
+                               it runs these same commands and never install.sh
 
 The organisation and machine layers may only `add` facts (own domains, hosts, folders),
 `set` values the baseline marks as settable, `tighten` rules, and make `exceptions` with
@@ -924,6 +927,14 @@ def use_config(folder):
 
 def main():
     try:
+        if "--ui" in sys.argv:
+            # optional, and loaded only here: the build never depends on ui/
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "guardrails_ui", os.path.join(HERE, "ui", "server.py"))
+            ui = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ui)
+            return ui.serve(sys.modules[__name__], arg("--config"))
         if "--describe" in sys.argv:
             sys.stdout.write(json.dumps(describe(), indent=2, ensure_ascii=False) + "\n")
             return 0
