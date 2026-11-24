@@ -20,6 +20,8 @@ Run after every change to one of them:
                                prints the merged policy (tests use it with fixtures)
     --local F                  another machine layer than <config>/local.<host>.json
     ./build.py --describe      prints the layer rules as JSON (for an editor or a UI)
+    ./build.py --schema        prints layer.schema.json, a JSON Schema of a layer for editors
+                               (completion, explanations); kept in the checkout, tests check it
     ./build.py --init DIR [--template empty|example] [--host NAME]
                                creates org.json and local.<host>.json in DIR, never overwrites
     ./build.py --migrate [--write]
@@ -102,7 +104,84 @@ SETTABLE = {
     "logging.enabled", "logging.path", "logging.max_command_chars", "logging.max_bytes",
     "logging.keep_files", "package_protection.sfw_works_in_sandbox",
 }
-LAYER_KEYS = {"note", "layer_format", "requires_baseline", "set", "add", "tighten",
+# What each layer path does, for --describe and the tools on top of it. Kept next to the
+# sets above, so a new path without an explanation fails tests/test_build.py.
+HELP = {
+    "organization.name": "Name of the organisation in the auto-mode text the classifier reads.",
+    "organization.person": "The person who works on this machine; the auto-mode text names "
+                           "them as the one who administers the servers.",
+    "organization.description": "One line about the organisation, for the auto-mode text.",
+    "organization.primary_use": "What Claude Code is mainly used for here, for the auto-mode text.",
+    "organization.source_control": "Where the code lives (e.g. a GitHub organisation), one per "
+                                   "line, for the auto-mode text.",
+    "organization.remote_targets": "What the ssh servers are (e.g. web servers, customer portal); "
+                                   "the auto-mode text treats them all as production.",
+    "ssh.search_domain": "Domain that short host names in ssh hosts belong to: web01 means "
+                         "web01.<search domain>.",
+    "install.launchagent_label": "Name of the LaunchAgent that runs the ssh-agent with a fixed "
+                                 "socket. To change it later, run uninstall.sh first.",
+    "patch_scan.root": "Folder the projects in patch scan projects are relative to; /patch-check "
+                       "and the --audit search start here.",
+    "logging.enabled": "Whether the hook writes its decision log.",
+    "logging.path": "File of the hook's decision log (read with scripts/guard-log.py).",
+    "logging.max_command_chars": "Commands in the log are cut to this many characters.",
+    "logging.max_bytes": "Size in bytes at which the log file is rotated.",
+    "logging.keep_files": "How many rotated log files are kept.",
+    "package_protection.sfw_works_in_sandbox": "Whether Socket Firewall works inside the sandbox. "
+                                               "While false, a package install is handed to your "
+                                               "terminal right away.",
+    "domains.own": "Your own domains. network: reachable from the sandbox; webfetch: WebFetch "
+                   "without a question; trusted: named as internal in the auto-mode text. "
+                   "Subdomains adds *.domain.",
+    "domains.package_registries": "Package registries the sandbox may reach and WebFetch may "
+                                  "read without a question.",
+    "domains.security_sources": "Vulnerability and package-health services (OSV, deps.dev); "
+                                "sandbox network and WebFetch.",
+    "domains.code_hosts": "Code hosts the sandbox may reach (git over https, archives, raw files).",
+    "domains.os_packages": "Operating-system package mirrors the sandbox may reach.",
+    "domains.documentation": "Documentation sites WebFetch may read without a question. Not "
+                             "added to the sandbox network.",
+    "webfetch.extra_hosts": "Further hosts WebFetch may read without a question, without opening "
+                            "them to the sandbox network.",
+    "ssh.hosts": "Your servers. The auto-mode text names them as authorized ssh targets: reading "
+                 "is free, every change asks. Add new servers to known_hosts as well.",
+    "working_directories.paths": "Folders Claude Code may read and write (additionalDirectories). "
+                                 "git network commands run there without a question.",
+    "patch_scan.projects": "Projects /patch-check scans for outdated packages, relative to patch "
+                           "scan root. Read only by the script, not by the hook.",
+    "sandbox.allow_read": "Extra paths commands in the sandbox may read (e.g. package caches). "
+                          "A leading ~ is your home folder.",
+    "sandbox.allow_write": "Extra paths commands in the sandbox may write (e.g. package caches).",
+    "sandbox.allow_unix_sockets": "Unix sockets the sandbox may connect to, e.g. the ssh-agent "
+                                  "socket.",
+    "data_classes.secret_files.patterns": "Regular expressions for files with credentials; reading "
+                                          "a matching file (also on a server) asks first.",
+    "data_classes.personal_files.patterns": "Regular expressions for files with personal data "
+                                            "(access and mail logs); reading one asks first.",
+    "credentials.files": "Files and folders the sandbox hides from every command.",
+    "credentials.read_deny": "Paths the Read tool is denied (permission rules Read(...)).",
+    "credentials.env_vars": "Environment variables the sandbox removes from every command.",
+    "always_ask.tools": "Command-line tools that always ask and run outside the sandbox, because "
+                        "they need the keychain or a local socket.",
+    "always_ask.extra_ask": "Further permission rules that always ask, e.g. Read(**/.env) or "
+                            "Bash(gh gist *).",
+    "logging.log_silent_tools": "Calls that are logged even when the hook lets them through "
+                                "silently (ssh, git-network).",
+    "package_protection.min_release_age_days": "Release-age window for packages in days. Only "
+                                               "recorded for now: the npm, pip, uv and Composer "
+                                               "settings (package_protection.env) still use 7 days.",
+    "package_protection.require_sfw": "Package installs only run through Socket Firewall (sfw).",
+    "data_classes.secret_files.ask": "Whether reading a file that matches the secret patterns asks.",
+    "data_classes.personal_files.ask": "Whether reading a file that matches the personal-data "
+                                       "patterns asks.",
+    "claude_code.lock_lower_scopes": "Managed settings become the only source of permission rules "
+                                     "and sandbox read paths; rules from ~/.claude and projects stop "
+                                     "applying (check with --audit).",
+    "claude_code.required_minimum_version": "Oldest Claude Code version allowed to start; it must "
+                                            "know every setting this product writes.",
+}
+# "$schema" only points an editor at layer.schema.json (--schema); the build ignores it.
+LAYER_KEYS = {"$schema", "note", "layer_format", "requires_baseline", "set", "add", "tighten",
               "exceptions"}
 
 # The shape of a layer file (the keys above and what they mean). It changes independently
@@ -247,6 +326,8 @@ def index_ids(policy):
 
 
 PURPOSES = {"network", "webfetch", "trusted"}
+DOMAIN_RE = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+HOST_RE = r"^[A-Za-z0-9][A-Za-z0-9.-]*$"
 
 
 def check_entry(where, path, e):
@@ -257,8 +338,7 @@ def check_entry(where, path, e):
     if path == "domains.own":
         if not isinstance(e, dict) or not isinstance(e.get("domain"), str) or not e["domain"]:
             bad("needs domain")
-        if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
-                        e["domain"]):
+        if not re.match(DOMAIN_RE, e["domain"]):
             bad("domain is not a domain name")
         purp = e.get("purposes")
         if not isinstance(purp, list) or not purp or not set(purp) <= PURPOSES:
@@ -267,7 +347,7 @@ def check_entry(where, path, e):
             bad("wildcard must be true or false")
     elif path == "ssh.hosts":
         if not isinstance(e, dict) or not isinstance(e.get("host"), str) or \
-                not re.match(r"^[A-Za-z0-9][A-Za-z0-9.-]*$", e.get("host") or ""):
+                not re.match(HOST_RE, e.get("host") or ""):
             bad("needs host (letters, digits, dot, dash)")
         if not isinstance(e.get("role", ""), str):
             bad("role must be text")
@@ -777,15 +857,15 @@ def describe():
         "layer_format": LAYER_FORMAT,
         "requires_baseline": default_requires(base["baseline_version"]),
         "layer_keys": sorted(LAYER_KEYS),
-        "set": {p: {"type": json_type(get_path(policy, p)), "baseline": get_path(policy, p)}
-                for p in sorted(SETTABLE)},
-        "add": {p: {"entry": entry_kind(p), "baseline": get_path(policy, p)}
+        "set": {p: {"type": json_type(get_path(policy, p)), "baseline": get_path(policy, p),
+                    "help": HELP[p]} for p in sorted(SETTABLE)},
+        "add": {p: {"entry": entry_kind(p), "baseline": get_path(policy, p), "help": HELP[p]}
                 for p in sorted(ADD_LISTS)},
         "tighten": dict(
-            [(p, {"entry": entry_kind(p), "baseline": get_path(policy, p)})
+            [(p, {"entry": entry_kind(p), "baseline": get_path(policy, p), "help": HELP[p]})
              for p in sorted(TIGHTEN_LISTS)]
             + [(p, {"type": json_type(get_path(policy, p)), "direction": d,
-                    "baseline": get_path(policy, p)})
+                    "baseline": get_path(policy, p), "help": HELP[p]})
                for p, d in sorted(TIGHTEN_VALUES.items())]),
         "exceptions": {
             "actions": ["off", "set", "shadow"],
@@ -798,6 +878,138 @@ def describe():
         "renamed": ren_ids,
         "renamed_paths": ren_paths,
     }
+
+
+SCHEMA_FILE = os.path.join(HERE, "layer.schema.json")
+# The schema of a released version, for "$schema" in a layer: independent of where the
+# configuration folder lies, and pinned to the same tag as product-version.
+SCHEMA_URL = ("https://raw.githubusercontent.com/eleven2-gmbh/agentic-guardrails/{}/"
+              "layer.schema.json")
+
+
+def checkout_tag():
+    """The release tag (v1.2.3) this checkout is exactly at, else None."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", HERE, "tag", "--points-at", "HEAD"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           universal_newlines=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    tags = [t for t in r.stdout.split() if re.match(r"^v\d+\.\d+\.\d+$", t)]
+    return sorted(tags, key=lambda t: version_tuple(t[1:]))[-1] if tags else None
+
+
+def schema_ref(folder):
+    """What --init writes as "$schema": the release URL when this checkout is at a tag,
+    else the path to layer.schema.json relative to the folder."""
+    tag = checkout_tag()
+    if tag:
+        return SCHEMA_URL.format(tag)
+    return os.path.relpath(os.path.realpath(SCHEMA_FILE), os.path.realpath(folder))
+
+
+def schema():
+    """A JSON Schema of a layer, for editors: completion of every path, its explanation on
+    hover, unknown keys flagged while typing. Generated from describe(); build.py remains
+    the check (the schema cannot express everything, e.g. duplicate ids or locked entries).
+    """
+    d = describe()
+
+    def value_schema(t):
+        return {"boolean": {"type": "boolean"}, "integer": {"type": "integer"},
+                "number": {"type": "number"},
+                "list of text": {"type": "array", "items": {"type": "string"}}}.get(
+                    t, {"type": "string"})
+
+    entry = {
+        "domain": {"type": "object", "required": ["domain", "purposes"], "properties": {
+            "domain": {"type": "string", "pattern": DOMAIN_RE},
+            "purposes": {"type": "array", "minItems": 1, "uniqueItems": True,
+                         "items": {"enum": sorted(PURPOSES)}},
+            "wildcard": {"type": "boolean", "description": "also *.<domain>"}}},
+        "host": {"type": "object", "required": ["host"], "properties": {
+            "host": {"type": "string", "pattern": HOST_RE},
+            "role": {"type": "string"}, "note": {"type": "string"}}},
+        "pattern": {"anyOf": [{"type": "string"}, {
+            "type": "object", "required": ["id", "pattern"], "properties": {
+                "id": {"type": "string"},
+                "pattern": {"type": "string", "description": "a regular expression"}}}]},
+        "text": {"type": "string", "minLength": 1},
+    }
+
+    def described(info, extra=""):
+        return "{}{}\nBaseline: {}".format(info["help"], extra, json.dumps(
+            info["baseline"], ensure_ascii=False))
+
+    def list_prop(info):
+        return {"type": "array", "items": entry[info["entry"]], "description": described(info)}
+
+    def value_prop(info):
+        out = dict(value_schema(info["type"]), description=described(info))
+        if "direction" in info:
+            out["description"] = described(info, " Stricter only: {}.".format(
+                {"higher": "a higher number", "true": "true",
+                 "higher-version": "a higher version"}[info["direction"]]))
+            if info["direction"] == "higher":
+                out["minimum"] = info["baseline"]
+            elif info["direction"] == "true" and info["baseline"] is True:
+                out["const"] = True
+        return out
+
+    def section(props, text):
+        return {"type": "object", "additionalProperties": False, "description": text,
+                "properties": props}
+
+    ex_ids = d["exceptions"]["off"] + d["exceptions"]["set"]
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$comment": "Generated by build.py --schema from build.py and baseline.json {}. "
+                    "Do not edit; build.py remains the check.".format(d["baseline_version"]),
+        "title": "agentic-guardrails layer (org.json, local.<host>.json)",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["requires_baseline"],
+        "properties": {
+            "$schema": {"type": "string", "description": "Path to this schema, for the editor."},
+            "note": {"type": ["string", "array"], "items": {"type": "string"},
+                     "description": "Free text for people; build.py ignores it."},
+            "layer_format": {"type": "integer", "minimum": 1, "maximum": d["layer_format"],
+                             "description": "Shape of this file; 1 when missing. "
+                                            "./build.py --migrate updates it."},
+            "requires_baseline": {"type": "string", "default": d["requires_baseline"],
+                                  "examples": [d["requires_baseline"]],
+                                  "description": "Baseline versions this layer was written for, "
+                                                 "e.g. >=1.0 <2."},
+            "set": section({p: value_prop(i) for p, i in d["set"].items()},
+                           "Values without a security direction. Only what differs from the "
+                           "baseline belongs here."),
+            "add": section({p: list_prop(i) for p, i in d["add"].items()},
+                           "Facts added to the baseline's lists."),
+            "tighten": section({p: list_prop(i) if "entry" in i else value_prop(i)
+                                for p, i in d["tighten"].items()},
+                               "Stricter only: extra entries, values in their stricter direction."),
+            "exceptions": {
+                "type": "array", "description": "Each with an id, a reason and an expiry date.",
+                "items": {"type": "object", "required": ["id", "action", "reason", "expires"],
+                          "properties": {
+                              "id": {"type": "string", "examples": ex_ids,
+                                     "description": "off: an entry id; set: a tighten value; "
+                                                    "shadow: a rule id of hooks/guard.py. "
+                                                    "Locked ids are refused."},
+                              "action": {"enum": d["exceptions"]["actions"]},
+                              "reason": {"type": "string", "minLength": 1},
+                              "expires": {"type": "string",
+                                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                                          "description": "YYYY-MM-DD; an expired exception "
+                                                         "stops the build."},
+                              "value": {"description": "the new value, only for action set"}}}},
+        },
+    }
+
+
+def schema_text():
+    return json.dumps(schema(), indent=2, ensure_ascii=False) + "\n"
 
 
 def default_requires(version):
@@ -824,6 +1036,7 @@ def init(folder, template="empty", host=None):
     base, _ = load_baseline()
     req = default_requires(base["baseline_version"])
     head = {"layer_format": LAYER_FORMAT, "requires_baseline": req}
+    first = {"$schema": schema_ref(folder)}
     if template == "example":
         ex = os.path.join(HERE, "examples")
         org, local = (dict(read_json(os.path.join(ex, f)), **head)
@@ -840,6 +1053,8 @@ def init(folder, template="empty", host=None):
                                "and an expiry date. See README.".format(host)]}, **head)
         local["add"] = {"working_directories.paths": []}
         local["exceptions"] = []
+    org, local = (dict(first, **{k: v for k, v in l.items() if k != "$schema"})
+                  for l in (org, local))
     files = [(os.path.join(folder, "org.json"), org),
              (os.path.join(folder, "local.{}.json".format(host)), local)]
     present = [f for f, _ in files if os.path.exists(f)]
@@ -935,6 +1150,9 @@ def main():
             ui = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(ui)
             return ui.serve(sys.modules[__name__], arg("--config"))
+        if "--schema" in sys.argv:
+            sys.stdout.write(schema_text())
+            return 0
         if "--describe" in sys.argv:
             sys.stdout.write(json.dumps(describe(), indent=2, ensure_ascii=False) + "\n")
             return 0

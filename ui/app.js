@@ -319,6 +319,7 @@
             ? setIn(which, op, path, clone(info.baseline)) : unsetIn(which, op, path)) }),
           h("span", { id }, path),
         ]),
+        info.help ? h("div", { class: "help" }, info.help) : null,
       ]),
       h("div", { class: "field" }, [
         valueInput(info.type, value, !has, (v) => setIn(which, op, path, v), path),
@@ -408,7 +409,7 @@
     const err = errorFor(which, path);
     const base = info.baseline || [];
     return h("div", { class: "row", key: path }, [
-      h("div", { class: "label" }, [h("span", path), h("div", { class: "base" }, info.entry + " entries")]),
+      h("div", { class: "label" }, [h("span", path), info.help ? h("div", { class: "help" }, info.help) : null]),
       h("div", { class: "field" }, [
         entryEditor(which, op, path, info.entry, list),
         h("details", { class: "baseline" }, [

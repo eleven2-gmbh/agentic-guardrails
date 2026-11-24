@@ -107,8 +107,8 @@ versioned `extends` (linters), and base-plus-overlay rendering at build time:
   function (`migrate_layer`) applies those and the format steps, in memory for the build
   (with a note) and into the files for `--migrate --write` (after showing a diff). Nothing
   is rewritten silently. A test checks that every rename points at something that exists.
-- Tools on top (an editor, the optional UI) read the rules from `--describe` and let
-  `build.py` check every change. They never repeat the rules, and the product works
+- Tools on top (an editor via `layer.schema.json`, the optional UI) read the rules from
+  `--describe` (with an explanation per path) and let `build.py` check every change. They never repeat the rules, and the product works
   without them.
 
 ## 9. Claude Code's own settings scopes

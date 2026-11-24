@@ -259,8 +259,42 @@ check("describe lists every layer path", set(D["set"]) == build.SETTABLE
 check("describe never offers a locked id for an exception",
       not set(D["locked"]) & (set(D["exceptions"]["off"]) | set(D["exceptions"]["set"])))
 check("describe is JSON", json.loads(json.dumps(D)) == D)
+LAYER_PATHS = build.SETTABLE | build.ADD_LISTS | build.TIGHTEN_LISTS | set(build.TIGHTEN_VALUES)
+check("every layer path has an explanation, and only those",
+      set(build.HELP) == LAYER_PATHS and all(build.HELP[p].strip() for p in LAYER_PATHS))
+check("describe carries the explanations",
+      all(D[op][p]["help"] == build.HELP[p] for op in ("set", "add", "tighten") for p in D[op]))
 check("describe: requires_baseline accepts the baseline",
       build.version_ok(BASE["baseline_version"], D["requires_baseline"]))
+
+# --- schema: generated, current, and accepted in a layer ----------------------------
+SCH = build.schema()
+check("layer.schema.json in the checkout is current (run ./build.py --schema > layer.schema.json)",
+      open(build.SCHEMA_FILE, encoding="utf-8").read() == build.schema_text())
+props = SCH["properties"]
+check("schema knows every layer key", set(props) == build.LAYER_KEYS)
+check("schema lists every layer path, and no other",
+      set(props["set"]["properties"]) == build.SETTABLE
+      and set(props["add"]["properties"]) == build.ADD_LISTS
+      and set(props["tighten"]["properties"]) == build.TIGHTEN_LISTS | set(build.TIGHTEN_VALUES))
+check("schema refuses unknown keys like build.py", SCH["additionalProperties"] is False
+      and all(props[op]["additionalProperties"] is False for op in ("set", "add", "tighten")))
+check("schema explains every path",
+      all(build.HELP[p] in props[op]["properties"][p]["description"]
+          for op in ("set", "add", "tighten") for p in props[op]["properties"]))
+check("schema never offers a locked id",
+      not set(props["exceptions"]["items"]["properties"]["id"]["examples"]) & set(D["locked"]))
+p, err = merged(org_changes={"$schema": "../agentic-guardrails/layer.schema.json"})
+check("a layer with $schema builds " + (err or ""), p is not None)
+
+orig_tag = build.checkout_tag
+build.checkout_tag = lambda: "v9.8.7"
+check("at a release tag, $schema is that release's URL", build.schema_ref(TMP)
+      == "https://raw.githubusercontent.com/eleven2-gmbh/agentic-guardrails/v9.8.7/layer.schema.json")
+build.checkout_tag = lambda: None
+check("between releases, $schema is the path to the checkout's file",
+      os.path.samefile(os.path.join(TMP, build.schema_ref(TMP)), build.SCHEMA_FILE))
+build.checkout_tag = orig_tag
 
 # --- init: both templates build, nothing is overwritten -----------------------------
 for tpl in build.TEMPLATES:
@@ -272,6 +306,10 @@ for tpl in build.TEMPLATES:
         written, ierr = [], str(e)
     check("init {} writes two layers that build {}".format(tpl, ierr),
           [os.path.basename(f) for f in written] == ["org.json", "local.testhost.json"])
+    for f in written:
+        layer = json.load(open(f, encoding="utf-8"))
+        check("init {}: {} names the schema first".format(tpl, os.path.basename(f)),
+              list(layer)[0] == "$schema" and layer["$schema"] == build.schema_ref(folder))
     try:
         build.init(folder, tpl, host="testhost")
         check("init {} refuses to overwrite".format(tpl), False)
