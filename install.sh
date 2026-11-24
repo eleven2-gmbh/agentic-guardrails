@@ -2,7 +2,9 @@
 # Installs the Claude Code base protection incl. package protection.
 # Run as your normal user:  ./install.sh [--config DIR]   (asks for sudo for the system part)
 # DIR holds org.json, local.<host>.json and the policy.json and managed-settings.json that
-# build.py --config DIR generated there; any test_*.py in DIR runs before installing.
+# build.py --config DIR generated there; any test_*.py in DIR runs before installing, with
+# AGENTIC_GUARDRAILS_DIR set to this checkout. If DIR/product-version names a tag (v1.2.3),
+# this checkout must be clean and exactly at that tag, else nothing is installed.
 # Without --config, config/ in this checkout and the generated files next to build.py.
 set -euo pipefail
 CONF=""
@@ -32,6 +34,24 @@ SFW_X86_SHA="b574931bc2b3c36a9bf07ac07b9c07894f8cd314efc91bc5e4fe1c371b56adca"
 SFW_BIN="/usr/local/bin/sfw"
 
 echo "1/7 Checking files"
+# The configuration may pin the product version it was built and tested with. Then only a
+# clean checkout of exactly that tag installs, never work in progress (README, Configure).
+if [ -n "$CONF" ] && [ -f "$CONF/product-version" ]; then
+  PIN=$(tr -d '[:space:]' < "$CONF/product-version")
+  [[ "$PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || { echo "ERROR: $CONF/product-version must hold one tag like v1.2.3, not '$PIN'" >&2; exit 1; }
+  [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)" ] \
+    || { echo "ERROR: $CONF/product-version needs a git checkout of agentic-guardrails here" >&2; exit 1; }
+  [ -z "$(git status --porcelain)" ] \
+    || { echo "ERROR: this checkout has uncommitted changes (git status). Installing only from $PIN." >&2; exit 1; }
+  git tag --points-at HEAD | grep -qx "$PIN" \
+    || { echo "ERROR: this checkout is at $(git describe --tags --always), the configuration pins $PIN." >&2
+         echo "       Run: git -C \"$PWD\" checkout $PIN" >&2; exit 1; }
+  echo "    product $PIN, checkout clean"
+elif [ -n "$CONF" ]; then
+  echo "    NOTE: no $CONF/product-version, installing this checkout as it is"
+fi
+export AGENTIC_GUARDRAILS_DIR="$PWD"
 /usr/bin/sed "s/@LABEL@/$LABEL/g" launchd/claude-ssh-agent.plist > "${TMPDIR:-/tmp}/ssh-agent-$STAMP.plist"
 /usr/bin/plutil -lint "${TMPDIR:-/tmp}/ssh-agent-$STAMP.plist" >/dev/null
 /usr/bin/python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$GEN/policy.json"

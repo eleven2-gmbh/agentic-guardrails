@@ -53,9 +53,21 @@ The boundaries are the sandbox, the network allowlist and the root-owned setting
 
 ## Configure
 
-Keep your configuration in a folder of your own, outside this repository (it holds your
-organisation's facts, and it can live in a private repository that pins this one as a
-submodule). Copy `examples/org.example.json` to `<your folder>/org.json` and
+Keep your configuration in a folder of your own, outside this repository: it holds your
+organisation's facts, so a private repository next to this checkout suits it well.
+
+```
+agentic-guardrails/     this repository, one clone
+my-guardrails/          your configuration (private), with product-version holding v1.2.3
+```
+
+`product-version` is optional and holds the tag your configuration was built and tested
+with. With it, `install.sh` only installs from a clean checkout at exactly that tag.
+To update, check out the new tag, rebuild, test, and commit the new `product-version`
+together with the regenerated files. Tests in your folder find this checkout in the
+environment variable `AGENTIC_GUARDRAILS_DIR`.
+
+Copy `examples/org.example.json` to `<your folder>/org.json` and
 `examples/local.example.json` to `<your folder>/local.<short host name>.json`, then edit
 them. A layer may only
 
