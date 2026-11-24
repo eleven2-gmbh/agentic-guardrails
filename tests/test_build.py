@@ -203,6 +203,115 @@ build.read_json = orig_read
 check("renamed id maps to the new one " + (err or ""), p is not None
       and not any("access" in x for x in p["data_classes"]["personal_files"]["patterns"]))
 
+# --- layer_format: missing means 1, newer than the product stops ----------------
+p, err = merged(local_changes={"layer_format": 1})
+check("layer_format 1 builds " + (err or ""), p is not None)
+refused("layer_format newer than the product", "newer than this product",
+        local_changes={"layer_format": build.LAYER_FORMAT + 1})
+refused("layer_format not a number", "whole number", local_changes={"layer_format": "1"})
+refused("layer_format true", "whole number", local_changes={"layer_format": True})
+
+# --- migrate_layer: format steps and renamed paths -------------------------------
+build.LAYER_FORMAT, build.FORMAT_STEPS = 2, {1: lambda l: dict(l, note=["step ran"])}
+m, notes = build.migrate_layer({"requires_baseline": ">=1.0 <2"}, {}, {}, "t")
+check("format step runs and records the new format",
+      m.get("layer_format") == 2 and m["note"] == ["step ran"] and notes)
+build.LAYER_FORMAT, build.FORMAT_STEPS = 1, {}
+paths = {"patch_scan.root": "patch_scan.base", "credentials.read_deny": "credentials.deny"}
+m, notes = build.migrate_layer(
+    {"set": {"logging.enabled": True, "patch_scan.root": "~/c"},
+     "exceptions": [{"id": "credentials.read_deny:~/.aws/**"},
+                    {"id": "personal.alt-access"}]},
+    {"personal.alt-access": "personal.access-log"}, paths, "t")
+check("renamed path in set, order kept",
+      list(m["set"]) == ["logging.enabled", "patch_scan.base"])
+check("renamed list path inside an exception id",
+      m["exceptions"][0]["id"] == "credentials.deny:~/.aws/**")
+check("renamed id in an exception", m["exceptions"][1]["id"] == "personal.access-log")
+check("one note per change", len(notes) == 3)
+try:
+    build.migrate_layer({"set": {"patch_scan.root": "a", "patch_scan.base": "b"}}, {},
+                        paths, "t")
+    check("rename onto a key the layer already has is refused", False)
+except build.LayerError as e:
+    check("rename onto a key the layer already has is refused", "by hand" in str(e))
+m, notes = build.migrate_layer(ORG, {}, {}, "t")
+check("a current layer stays unchanged", m == ORG and not notes)
+
+# --- the baseline's renames point at something that exists ------------------------
+BASE, BPOL = build.load_baseline()
+BIDS = build.index_ids(BPOL)
+for old, new in (BASE.get("renamed") or {}).items():
+    check("renamed {} -> {}: new exists, old is gone".format(old, new),
+          new in BIDS and old not in BIDS)
+for old, new in (BASE.get("renamed_paths") or {}).items():
+    known = build.SETTABLE | build.ADD_LISTS | build.TIGHTEN_LISTS | set(build.TIGHTEN_VALUES)
+    check("renamed path {} -> {}: new is a layer path, old is not".format(old, new),
+          new in known and old not in known)
+
+# --- describe: the rules as data, consistent with build.py ------------------------
+D = build.describe()
+check("describe carries both versions", D["baseline_version"] == BASE["baseline_version"]
+      and D["layer_format"] == build.LAYER_FORMAT)
+check("describe lists every layer path", set(D["set"]) == build.SETTABLE
+      and set(D["add"]) == build.ADD_LISTS
+      and set(D["tighten"]) == build.TIGHTEN_LISTS | set(build.TIGHTEN_VALUES))
+check("describe never offers a locked id for an exception",
+      not set(D["locked"]) & (set(D["exceptions"]["off"]) | set(D["exceptions"]["set"])))
+check("describe is JSON", json.loads(json.dumps(D)) == D)
+check("describe: requires_baseline accepts the baseline",
+      build.version_ok(BASE["baseline_version"], D["requires_baseline"]))
+
+# --- init: both templates build, nothing is overwritten -----------------------------
+for tpl in build.TEMPLATES:
+    folder = os.path.join(TMP, "init-" + tpl)
+    try:
+        written = build.init(folder, tpl, host="testhost")
+        ierr = ""
+    except build.LayerError as e:
+        written, ierr = [], str(e)
+    check("init {} writes two layers that build {}".format(tpl, ierr),
+          [os.path.basename(f) for f in written] == ["org.json", "local.testhost.json"])
+    try:
+        build.init(folder, tpl, host="testhost")
+        check("init {} refuses to overwrite".format(tpl), False)
+    except build.LayerError as e:
+        check("init {} refuses to overwrite".format(tpl), "already present" in str(e))
+try:
+    build.init(os.path.join(TMP, "init-bad"), "fancy")
+    check("init refuses an unknown template", False)
+except build.LayerError as e:
+    check("init refuses an unknown template", "unknown" in str(e))
+
+# --- migrate: dry run writes nothing, --write writes, then current ------------------
+import contextlib
+import io
+
+mdir = os.path.join(TMP, "migrate")
+os.makedirs(mdir)
+old_layer = dict(LOCAL, exceptions=[dict(exc()["exceptions"][0], id="personal.alt-access")])
+with open(os.path.join(mdir, "local.box.json"), "w", encoding="utf-8") as f:
+    json.dump(old_layer, f)
+with open(os.path.join(mdir, "org.json"), "w", encoding="utf-8") as f:
+    f.write(build.layer_text(ORG))
+build.read_json = read_with_rename
+saved = build.CONFIG
+build.CONFIG = mdir
+with contextlib.redirect_stdout(io.StringIO()) as out:
+    n_dry = build.migrate(write=False)
+dry_file = json.load(open(os.path.join(mdir, "local.box.json"), encoding="utf-8"))
+with contextlib.redirect_stdout(io.StringIO()):
+    n_write = build.migrate(write=True)
+    n_after = build.migrate(write=False)
+build.CONFIG = saved
+build.read_json = orig_read
+new_file = json.load(open(os.path.join(mdir, "local.box.json"), encoding="utf-8"))
+check("migrate dry run finds one file and writes nothing",
+      n_dry == 1 and dry_file == old_layer and "personal.access-log" in out.getvalue())
+check("migrate --write writes the new id", n_write == 1
+      and new_file["exceptions"][0]["id"] == "personal.access-log")
+check("after migrate everything is current", n_after == 0)
+
 # --- the examples in examples/ build ------------------------------------------
 EX = os.path.join(HERE, "..", "examples")
 try:

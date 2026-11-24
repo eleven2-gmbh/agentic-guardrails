@@ -19,6 +19,13 @@ Run after every change to one of them:
     ./build.py --effective [--org F] [--local F]
                                prints the merged policy (tests use it with fixtures)
     --local F                  another machine layer than <config>/local.<host>.json
+    ./build.py --describe      prints the layer rules as JSON (for an editor or a UI)
+    ./build.py --init DIR [--template empty|example] [--host NAME]
+                               creates org.json and local.<host>.json in DIR, never overwrites
+    ./build.py --migrate [--write]
+                               brings the layers in <config> to the current layer_format and
+                               to ids and paths the baseline renamed; shows a diff, writes
+                               only with --write
 
 The organisation and machine layers may only `add` facts (own domains, hosts, folders),
 `set` values the baseline marks as settable, `tighten` rules, and make `exceptions` with
@@ -92,7 +99,71 @@ SETTABLE = {
     "logging.enabled", "logging.path", "logging.max_command_chars", "logging.max_bytes",
     "logging.keep_files", "package_protection.sfw_works_in_sandbox",
 }
-LAYER_KEYS = {"note", "requires_baseline", "set", "add", "tighten", "exceptions"}
+LAYER_KEYS = {"note", "layer_format", "requires_baseline", "set", "add", "tighten",
+              "exceptions"}
+
+# The shape of a layer file (the keys above and what they mean). It changes independently
+# of the baseline's content, so it has its own number. A layer without `layer_format` is
+# format 1. When the format changes, FORMAT_STEPS[n] turns a format-n layer into n+1, and
+# `--migrate` writes the result (design notes, 8).
+LAYER_FORMAT = 1
+FORMAT_STEPS = {}
+
+
+def migrate_layer(layer, renamed_ids, renamed_paths, name):
+    """(migrated copy, notes): the layer in the current format, with ids and paths the
+    baseline renamed replaced. The same function serves the build (in memory, with a
+    note) and `--migrate` (written to the file), so both always agree."""
+    if not isinstance(layer, dict):
+        raise LayerError("{}: a layer must be a JSON object".format(name))
+    layer, notes = copy.deepcopy(layer), []
+    fmt = layer.get("layer_format", 1)
+    if not isinstance(fmt, int) or isinstance(fmt, bool) or fmt < 1:
+        raise LayerError("{}: layer_format must be a whole number from 1".format(name))
+    if fmt > LAYER_FORMAT:
+        raise LayerError("{}: layer_format {} is newer than this product understands ({}). "
+                         "Check out the product version the layer was written for".format(
+                             name, fmt, LAYER_FORMAT))
+    while fmt < LAYER_FORMAT:
+        layer = FORMAT_STEPS[fmt](layer)
+        notes.append("layer format {} -> {}".format(fmt, fmt + 1))
+        fmt += 1
+        layer["layer_format"] = fmt
+
+    def new_path(path):
+        return renamed_paths.get(path, path)
+
+    def new_id(i):
+        if i in renamed_ids:
+            return renamed_ids[i]
+        if i in renamed_paths:
+            return renamed_paths[i]
+        head, sep, tail = i.partition(":")
+        if sep and head in renamed_paths:
+            return renamed_paths[head] + ":" + tail
+        return i
+
+    for op in ("set", "add", "tighten"):
+        section = layer.get(op)
+        if not isinstance(section, dict) or not any(k in renamed_paths for k in section):
+            continue
+        out = {}
+        for k, v in section.items():
+            n = new_path(k)
+            if n in out or (n != k and n in section):
+                raise LayerError("{}: {} {} was renamed to {}, which the layer already has. "
+                                 "Merge the two by hand".format(name, op, k, n))
+            if n != k:
+                notes.append("{} {} is now called {}".format(op, k, n))
+            out[n] = v
+        layer[op] = out
+    for ex in layer.get("exceptions") or []:
+        if isinstance(ex, dict) and isinstance(ex.get("id"), str):
+            n = new_id(ex["id"])
+            if n != ex["id"]:
+                notes.append("exception id {} is now called {}".format(ex["id"], n))
+                ex["id"] = n
+    return layer, notes
 
 
 def read_json(path):
@@ -347,36 +418,45 @@ def host_layer():
     return os.path.join(CONFIG, "local.{}.json".format(socket.gethostname().split(".")[0]))
 
 
-def effective(org_path=None, local_path=None, today=None):
-    """The merged policy: baseline, then organisation, then machine."""
+def load_baseline():
+    """(baseline.json, its policy with baseline_version), checked."""
     base = read_json(BASELINE)
     for k in ("baseline_version", "policy", "locked"):
         if k not in base:
             raise LayerError("baseline.json: {} missing".format(k))
     version_tuple(base["baseline_version"])
+    for k in ("renamed", "renamed_paths"):
+        if not isinstance(base.get(k) or {}, dict):
+            raise LayerError("baseline.json: {} must map old to new".format(k))
     policy = copy.deepcopy(base["policy"])
     policy["baseline_version"] = base["baseline_version"]
     for lp in all_lists(policy):
         for e in get_path(policy, lp):
             check_entry("baseline.json", lp, e)
-    base_policy = copy.deepcopy(policy)
     index_ids(policy)
-    locked = set(base["locked"])
-    base_ids = index_ids(base_policy)
-    for i in locked:
+    base_ids = index_ids(policy)
+    for i in base["locked"]:
         if i not in base_ids:
-            get_path(base_policy, i)  # raises for a locked key that does not exist
+            get_path(policy, i)  # raises for a locked key that does not exist
+    return base, policy
+
+
+def renames(base):
+    return base.get("renamed") or {}, base.get("renamed_paths") or {}
+
+
+def effective(org_path=None, local_path=None, today=None):
+    """The merged policy: baseline, then organisation, then machine."""
+    base, policy = load_baseline()
+    base_policy = copy.deepcopy(policy)
+    locked = set(base["locked"])
     today = today or datetime.date.today()
-    renamed = base.get("renamed") or {}
     shadow = []
     for path in (org_path or os.path.join(CONFIG, "org.json"), local_path or host_layer()):
-        layer = read_json(path)
-        for ex in layer.get("exceptions") or []:
-            if isinstance(ex, dict) and ex.get("id") in renamed:
-                print("Note: {}: id {} is now called {} (baseline.json renamed), please "
-                      "rename it".format(shown(path), ex["id"],
-                                          renamed[ex["id"]]), file=sys.stderr)
-                ex["id"] = renamed[ex["id"]]
+        layer, notes = migrate_layer(read_json(path), *renames(base), name=shown(path))
+        for n in notes:
+            print("Note: {}: {}. Run ./build.py --migrate to write it into the file".format(
+                shown(path), n), file=sys.stderr)
         apply_layer(policy, layer, shown(path), locked, today, shadow)
     check_locked(policy, base_policy, locked)
     ids = policy["shadow_rules"]["ids"]
@@ -654,6 +734,166 @@ def audit(p):
     return 0
 
 
+# ------------------------------------------------- describe, init, migrate --
+# What a configuration tool (the optional UI, an editor, a script) needs, so that none of
+# them repeats the rules above. The product works without any of them.
+
+def json_type(v):
+    if isinstance(v, bool):
+        return "boolean"
+    if isinstance(v, int):
+        return "integer"
+    if isinstance(v, float):
+        return "number"
+    if isinstance(v, list):
+        return "list of text"
+    return "text"
+
+
+def entry_kind(path):
+    """The entry shapes check_entry knows."""
+    if path == "domains.own":
+        return "domain"   # {"domain", "purposes": [...], "wildcard": bool}
+    if path == "ssh.hosts":
+        return "host"     # {"host", "role", "note"}
+    if path.startswith("data_classes."):
+        return "pattern"  # {"id", "pattern"} with a regular expression
+    return "text"
+
+
+def describe():
+    """The layer rules as data: what may be set, added, tightened and excepted."""
+    base, policy = load_baseline()
+    locked = set(base["locked"])
+    ids = index_ids(policy)
+    ren_ids, ren_paths = renames(base)
+    return {
+        "note": ["Generated by build.py --describe from build.py and baseline.json. "
+                 "build.py remains the check; this only describes it."],
+        "baseline_version": base["baseline_version"],
+        "layer_format": LAYER_FORMAT,
+        "requires_baseline": default_requires(base["baseline_version"]),
+        "layer_keys": sorted(LAYER_KEYS),
+        "set": {p: {"type": json_type(get_path(policy, p)), "baseline": get_path(policy, p)}
+                for p in sorted(SETTABLE)},
+        "add": {p: {"entry": entry_kind(p), "baseline": get_path(policy, p)}
+                for p in sorted(ADD_LISTS)},
+        "tighten": dict(
+            [(p, {"entry": entry_kind(p), "baseline": get_path(policy, p)})
+             for p in sorted(TIGHTEN_LISTS)]
+            + [(p, {"type": json_type(get_path(policy, p)), "direction": d,
+                    "baseline": get_path(policy, p)})
+               for p, d in sorted(TIGHTEN_VALUES.items())]),
+        "exceptions": {
+            "actions": ["off", "set", "shadow"],
+            "off": [i for i in sorted(ids) if i not in locked],
+            "set": [p for p in sorted(TIGHTEN_VALUES) if p not in locked],
+            "shadow": "a rule id of hooks/guard.py (see scripts/guard-log.py)",
+        },
+        "locked": sorted(locked),
+        "purposes": sorted(PURPOSES),
+        "renamed": ren_ids,
+        "renamed_paths": ren_paths,
+    }
+
+
+def default_requires(version):
+    major, minor = version_tuple(version)[:2]
+    return ">={}.{} <{}".format(major, minor, major + 1)
+
+
+def layer_text(layer):
+    return json.dumps(layer, indent=2, ensure_ascii=False) + "\n"
+
+
+TEMPLATES = ("empty", "example")
+
+
+def init(folder, template="empty", host=None):
+    """A new configuration folder with an organisation and a machine layer. Refuses to
+    overwrite anything; the result is checked with effective() before it is reported."""
+    if template not in TEMPLATES:
+        raise LayerError("--template: {!r} unknown ({})".format(template, ", ".join(TEMPLATES)))
+    folder = os.path.abspath(os.path.expanduser(folder))
+    host = host or socket.gethostname().split(".")[0]
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]*$", host):
+        raise LayerError("--host: {!r} is not a short host name".format(host))
+    base, _ = load_baseline()
+    req = default_requires(base["baseline_version"])
+    head = {"layer_format": LAYER_FORMAT, "requires_baseline": req}
+    if template == "example":
+        ex = os.path.join(HERE, "examples")
+        org, local = (dict(read_json(os.path.join(ex, f)), **head)
+                      for f in ("org.example.json", "local.example.json"))
+    else:
+        org = dict({"note": ["Organisation layer. set: values without a security "
+                             "direction, add: facts, tighten: stricter only. See README."]},
+                   **head)
+        org["set"] = {"organization.name": "", "organization.person": "",
+                      "organization.description": "", "organization.primary_use": "",
+                      "organization.source_control": [], "organization.remote_targets": ""}
+        org["add"] = {"domains.own": [], "ssh.hosts": []}
+        local = dict({"note": ["Machine layer for {}. An exception needs an id, a reason "
+                               "and an expiry date. See README.".format(host)]}, **head)
+        local["add"] = {"working_directories.paths": []}
+        local["exceptions"] = []
+    files = [(os.path.join(folder, "org.json"), org),
+             (os.path.join(folder, "local.{}.json".format(host)), local)]
+    present = [f for f, _ in files if os.path.exists(f)]
+    if present:
+        raise LayerError("--init: {} already present, nothing written".format(
+            ", ".join(present)))
+    os.makedirs(folder, exist_ok=True)
+    for f, layer in files:
+        with open(f, "x", encoding="utf-8") as fh:
+            fh.write(layer_text(layer))
+    try:
+        effective(files[0][0], files[1][0])
+    except LayerError:
+        for f, _ in files:
+            os.remove(f)
+        raise
+    return [f for f, _ in files]
+
+
+def layer_files():
+    """org.json and every machine layer in the configuration folder."""
+    names = sorted(n for n in os.listdir(CONFIG)
+                   if n == "org.json" or re.match(r"^local\.[A-Za-z0-9-]+\.json$", n))
+    return [os.path.join(CONFIG, n) for n in names]
+
+
+def migrate(write=False):
+    """Bring every layer in the configuration folder to the current format and names.
+    Without write, only shows what would change. Returns the number of changed files."""
+    import difflib
+    base, _ = load_baseline()
+    changed = 0
+    for path in layer_files():
+        old = read_json(path)
+        new, notes = migrate_layer(old, *renames(base), name=shown(path))
+        if new == old:
+            print("{} is current".format(os.path.basename(path)))
+            continue
+        changed += 1
+        print("{}:".format(os.path.basename(path)))
+        for n in notes:
+            print("  " + n)
+        cur = read_text(path)
+        sys.stdout.writelines(difflib.unified_diff(
+            cur.splitlines(True), layer_text(new).splitlines(True),
+            os.path.basename(path) + " (now)", os.path.basename(path) + " (migrated)"))
+        if write:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(layer_text(new))
+            print("  written")
+    if changed and not write:
+        print("Nothing written. Run with --write to write it, then ./build.py")
+    elif changed:
+        print("Now run ./build.py and your tests, then commit the layers together")
+    return changed
+
+
 def arg(name):
     if name in sys.argv:
         i = sys.argv.index(name)
@@ -684,8 +924,21 @@ def use_config(folder):
 
 def main():
     try:
+        if "--describe" in sys.argv:
+            sys.stdout.write(json.dumps(describe(), indent=2, ensure_ascii=False) + "\n")
+            return 0
+        if arg("--init"):
+            for f in init(arg("--init"), arg("--template") or "empty", arg("--host")):
+                print("{} written".format(f))
+            print("  edit them, then: ./build.py --config {}".format(arg("--init")))
+            print("  pin the product: put the tag you build with (e.g. v1.2.3) into "
+                  "product-version there")
+            return 0
         if arg("--config"):
             use_config(arg("--config"))
+        if "--migrate" in sys.argv:
+            changed = migrate("--write" in sys.argv)
+            return 1 if changed and "--write" not in sys.argv else 0
         p = effective(arg("--org"), arg("--local"))
     except LayerError as e:
         print("ERROR: " + str(e), file=sys.stderr)

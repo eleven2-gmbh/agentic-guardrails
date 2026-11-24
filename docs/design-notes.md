@@ -101,6 +101,15 @@ versioned `extends` (linters), and base-plus-overlay rendering at build time:
 - A reference to an id that no longer exists, a duplicate id, an expired exception or a
   baseline version outside `requires_baseline` stops the build.
 - The merge happens at build time. The hook reads one finished file and merges nothing.
+- Updates: the layer file has its own `layer_format`, separate from `baseline_version`,
+  because the shape of a layer can change without the baseline's content. A baseline
+  that renames an id or a path lists it under `renamed` or `renamed_paths`; one
+  function (`migrate_layer`) applies those and the format steps, in memory for the build
+  (with a note) and into the files for `--migrate --write` (after showing a diff). Nothing
+  is rewritten silently. A test checks that every rename points at something that exists.
+- Tools on top (an editor, the optional UI) read the rules from `--describe` and let
+  `build.py` check every change. They never repeat the rules, and the product works
+  without them.
 
 ## 9. Claude Code's own settings scopes
 

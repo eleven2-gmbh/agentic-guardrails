@@ -67,9 +67,9 @@ To update, check out the new tag, rebuild, test, and commit the new `product-ver
 together with the regenerated files. Tests in your folder find this checkout in the
 environment variable `AGENTIC_GUARDRAILS_DIR`.
 
-Copy `examples/org.example.json` to `<your folder>/org.json` and
-`examples/local.example.json` to `<your folder>/local.<short host name>.json`, then edit
-them. A layer may only
+Create the folder with `./build.py --init ~/my-guardrails` (empty layers) or
+`--template example` (a copy of `examples/`); it writes `org.json` and
+`local.<short host name>.json` and never overwrites a file. Then edit them. A layer may only
 
 - `add` facts: own domains, ssh hosts, working directories, documentation hosts, sandbox paths,
 - `set` values without a security direction: names, descriptions, the log path, the LaunchAgent label,
@@ -85,6 +85,25 @@ a baseline version outside the layer's `requires_baseline`.
 ./build.py --config ~/my-guardrails          # write policy.json and managed-settings.json there
 /usr/bin/python3 -I tests/test_guard.py && /usr/bin/python3 -I tests/test_build.py
 ```
+
+`./build.py --describe` prints these rules as JSON (every path, its type, the stricter
+direction, the ids an exception may name), for an editor or a configuration tool.
+
+### Updating the product
+
+A layer names the baseline it was written for (`requires_baseline`) and the shape of the
+file (`layer_format`, 1 when missing). When an update renames an id or a path
+(`renamed`, `renamed_paths` in `baseline.json`) or changes the layer format, the build
+still works and prints a note; `--migrate` shows the change as a diff and writes it
+with `--write`:
+
+```
+./build.py --config ~/my-guardrails --migrate           # what would change, writes nothing
+./build.py --config ~/my-guardrails --migrate --write   # write it, then build and test
+```
+
+A major baseline version (outside `requires_baseline`) is not migrated: read the release
+notes and adjust the layers by hand.
 
 Tests of your own configuration (for example that your domains reach every list) go into
 the same folder as `test_*.py`; `install.sh` runs them before installing. Without
