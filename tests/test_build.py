@@ -361,10 +361,11 @@ base_env = build.read_json(build.BASELINE)["policy"]["package_protection"]["env"
 P7, _ = merged()
 check("the baseline's env already says what its release age says",
       P7["package_protection"]["env"] == base_env)
-for snip, text in (("npmrc.txt", "min-release-age=7\n"), ("pip.conf", "P7D"),
-                   ("composer-config.json", '"7 days"')):
-    check("snippets/{} carries the 7 days install.sh replaces".format(snip),
-          text in open(os.path.join(HERE, "..", "snippets", snip), encoding="utf-8").read()
+for snip, text in (("snippets/npmrc.txt", "min-release-age=7\n"), ("snippets/pip.conf", "P7D"),
+                   ("snippets/composer-config.json", '"7 days"'),
+                   ("skills/dep-check/SKILL.md", " 7 days"), ("skills/patch-check/SKILL.md", " 7 days")):
+    check("{} carries the 7 days install.sh replaces".format(snip),
+          text in open(os.path.join(HERE, "..", snip), encoding="utf-8").read()
           and build.read_json(build.BASELINE)["policy"]["package_protection"]["min_release_age_days"] == 7)
 
 # --- the command line behaves like one ------------------------------------------------

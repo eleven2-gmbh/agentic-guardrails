@@ -1,6 +1,7 @@
 # Template for .github/dependabot.yml.
 # Keep only the blocks for the repository's ecosystems; adjust "directory".
-# cooldown: propose new versions only after 7 days (like the local release age).
+# cooldown: propose new versions only after 7 days, the baseline's release age
+# (package_protection.min_release_age_days). If your policy tightens it, use the same days.
 # Security updates are exempt from cooldown.
 version: 2
 updates:

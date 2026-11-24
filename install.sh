@@ -143,7 +143,8 @@ done
 echo "7/7 Skills /dep-check, /patch-check and package settings for the terminal"
 for s in dep-check patch-check; do
   mkdir -p "$HOME/.claude/skills/$s"
-  cp "skills/$s/SKILL.md" "$HOME/.claude/skills/$s/SKILL.md"
+  # the skills name the release-age window; write the policy's days into them
+  /usr/bin/sed "s/ 7 days/ $DAYS days/g" "skills/$s/SKILL.md" > "$HOME/.claude/skills/$s/SKILL.md"
   echo "    Skill: ~/.claude/skills/$s/SKILL.md"
 done
 COMPOSER_CONF="${COMPOSER_HOME:-$HOME/.composer}/config.json"
