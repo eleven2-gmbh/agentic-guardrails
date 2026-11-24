@@ -350,6 +350,56 @@ check("migrate --write writes the new id", n_write == 1
       and new_file["exceptions"][0]["id"] == "personal.access-log")
 check("after migrate everything is current", n_after == 0)
 
+# --- release age: one value for every package manager ------------------------------
+p, err = merged(local_changes={"tighten": {"package_protection.min_release_age_days": 14}})
+env = p["package_protection"]["env"]
+check("a stricter release age reaches npm, pip, uv and Composer " + (err or ""),
+      env["npm_config_min_release_age"] == "14" and env["PIP_UPLOADED_PRIOR_TO"] == "P14D"
+      and env["UV_EXCLUDE_NEWER"] == "P14D" and env["COMPOSER_POLICY_COOLDOWN_PERIOD"] == "14 days")
+check("... and the managed settings' env", build.build(p)["env"]["UV_EXCLUDE_NEWER"] == "P14D")
+base_env = build.read_json(build.BASELINE)["policy"]["package_protection"]["env"]
+P7, _ = merged()
+check("the baseline's env already says what its release age says",
+      P7["package_protection"]["env"] == base_env)
+for snip, text in (("npmrc.txt", "min-release-age=7\n"), ("pip.conf", "P7D"),
+                   ("composer-config.json", '"7 days"')):
+    check("snippets/{} carries the 7 days install.sh replaces".format(snip),
+          text in open(os.path.join(HERE, "..", "snippets", snip), encoding="utf-8").read()
+          and build.read_json(build.BASELINE)["policy"]["package_protection"]["min_release_age_days"] == 7)
+
+# --- the command line behaves like one ------------------------------------------------
+import subprocess
+
+
+def cli(*args):
+    r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "..", "build.py")] + list(args),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+code, out = cli("--help")
+check("--help shows the commands", code == 0 and "usage: ./build.py" in out and "--init DIR" in out)
+code, out = cli("--version")
+check("--version", code == 0 and out.startswith("agentic-guardrails ") and "baseline" in out)
+for bad, says in ((["--chekc"], "unrecognized arguments"), (["--write"], "only goes with --migrate"),
+                  (["--host", "x"], "only go with --init"), (["--check", "--diff"], "not allowed with"),
+                  (["--init", TMP, "--config", TMP], "leave out --config")):
+    code, out = cli(*bad)
+    check("refused with a usage line: {}".format(" ".join(bad)), code == 2 and says in out
+          and "usage:" in out)
+code, out = cli("--config", os.path.join(TMP, "nope"))
+check("missing folder: says how to create it", code == 2 and "./build.py --init" in out)
+empty = os.path.join(TMP, "empty-folder")
+os.makedirs(empty)
+code, out = cli("--config", empty, "--diff")
+check("folder without org.json: says how to create the layers",
+      code == 2 and "has no org.json" in out and "--init" in out)
+with open(os.path.join(empty, "org.json"), "w", encoding="utf-8") as f:
+    f.write(build.layer_text(ORG))
+code, out = cli("--config", empty, "--check")
+check("no machine layer for this machine: names it and the way out",
+      code == 2 and "no machine layer for this machine" in out and "--local FILE" in out)
+
 # --- the examples in examples/ build ------------------------------------------
 EX = os.path.join(HERE, "..", "examples")
 try:

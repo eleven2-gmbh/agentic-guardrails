@@ -83,6 +83,7 @@ unknown keys, unknown or duplicate ids, values of the wrong type, expired except
 a baseline version outside the layer's `requires_baseline`.
 
 ```
+./build.py --help                            # every command and option
 ./build.py --config ~/my-guardrails --diff   # what would change
 ./build.py --config ~/my-guardrails          # write policy.json and managed-settings.json there
 /usr/bin/python3 -I tests/test_guard.py && /usr/bin/python3 -I tests/test_build.py \

@@ -561,8 +561,10 @@
       h("dl", { class: "facts" }, facts.flatMap(([k, v]) => [h("dt", k), h("dd", v)])),
       st.product_version && st.matches === false ? msg("warn",
         "The configuration pins " + st.product_version + ", the checkout is at " + (c ? c.describe : "?") +
-        (c && !c.clean ? " with uncommitted changes" : "") + ". install.sh will refuse. In your terminal: git -C " +
-        st.product + " checkout " + st.product_version) : null,
+        (c && !c.clean ? " with uncommitted changes" : "") + ". Editing and building work as they are; only " +
+        "install.sh refuses until the checkout is clean and at " + st.product_version + ". To install: stop this " +
+        "UI (Ctrl+C), git -C " + st.product + " checkout " + st.product_version + ", run install.sh, then switch " +
+        "back. Or, if this checkout is the version you want, put its tag into product-version.") : null,
       st.product_version && st.matches ? msg("ok", "The checkout matches product-version " + st.product_version + ".") : null,
     ])];
     if (!st.folder || !S.files["org.json"]) {

@@ -25,6 +25,10 @@ SYS="/Library/Application Support/ClaudeCode"
 LABEL=$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["install"]["launchagent_label"])' "$GEN/policy.json")
 [[ "$LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || { echo "install.launchagent_label invalid: $LABEL" >&2; exit 1; }
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+# Release-age window for the terminal's npm, pip and Composer: the same days as the policy
+# (package_protection.min_release_age_days), written into the snippets below.
+DAYS=$(/usr/bin/python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["package_protection"]["min_release_age_days"])' "$GEN/policy.json")
+[[ "$DAYS" =~ ^[1-9][0-9]*$ ]] || { echo "package_protection.min_release_age_days invalid: $DAYS" >&2; exit 1; }
 STAMP=$(date +%Y%m%d-%H%M%S)
 
 # Socket Firewall Free: pinned release (>= 7 days old) and its SHA-256 from the GitHub release
@@ -145,19 +149,28 @@ done
 COMPOSER_CONF="${COMPOSER_HOME:-$HOME/.composer}/config.json"
 if [ ! -f "$COMPOSER_CONF" ]; then
   mkdir -p "$(dirname "$COMPOSER_CONF")"
-  cp snippets/composer-config.json "$COMPOSER_CONF"
-  echo "    Composer: $COMPOSER_CONF created (release age 7 days)"
+  /usr/bin/sed "s/\"7 days\"/\"$DAYS days\"/" snippets/composer-config.json > "$COMPOSER_CONF"
+  echo "    Composer: $COMPOSER_CONF created (release age $DAYS days)"
 elif grep -q '"cooldown"' "$COMPOSER_CONF"; then
-  echo "    Composer: release age already in $COMPOSER_CONF, unchanged"
+  if grep -q "\"$DAYS days\"" "$COMPOSER_CONF"; then
+    echo "    Composer: release age $DAYS days already in $COMPOSER_CONF, unchanged"
+  else
+    echo "    NOTE: $COMPOSER_CONF has another release age than the policy ($DAYS days). Please change \"period\" yourself."
+  fi
 else
   echo "    NOTE: $COMPOSER_CONF already exists, not changed. Please copy the release age from snippets/composer-config.json yourself."
 fi
 NPMRC="$HOME/.npmrc"
 if [ -f "$NPMRC" ] && grep -qE '>>> (package protection|Paket-Schutz)' "$NPMRC"; then
-  echo "    ~/.npmrc: already present, unchanged"
+  if grep -qx "min-release-age=$DAYS" "$NPMRC"; then
+    echo "    ~/.npmrc: already present, unchanged"
+  else
+    echo "    NOTE: ~/.npmrc has another min-release-age than the policy ($DAYS days). Please change it yourself."
+  fi
 else
   [ -f "$NPMRC" ] && cp -p "$NPMRC" "$NPMRC.bak-$STAMP"
-  { [ -f "$NPMRC.bak-$STAMP" ] && cat "$NPMRC.bak-$STAMP" && echo; cat snippets/npmrc.txt; } > "$NPMRC.new"
+  { [ -f "$NPMRC.bak-$STAMP" ] && cat "$NPMRC.bak-$STAMP" && echo
+    /usr/bin/sed "s/^min-release-age=7\$/min-release-age=$DAYS/" snippets/npmrc.txt; } > "$NPMRC.new"
   mv "$NPMRC.new" "$NPMRC"
   echo "    ~/.npmrc: block added"
 fi
@@ -167,12 +180,15 @@ else
   PIPCONF="$HOME/.config/pip/pip.conf"
 fi
 if [ -f "$PIPCONF" ]; then
-  if grep -qE 'package protection|Paket-Schutz' "$PIPCONF"; then echo "    pip.conf: already present, unchanged"
+  if grep -qE 'package protection|Paket-Schutz' "$PIPCONF"; then
+    if grep -q "uploaded-prior-to = P${DAYS}D" "$PIPCONF"; then echo "    pip.conf: already present, unchanged"
+    else echo "    NOTE: $PIPCONF has another uploaded-prior-to than the policy (P${DAYS}D). Please change it yourself."
+    fi
   else echo "    NOTE: $PIPCONF already exists, not changed. Please copy the values from snippets/pip.conf yourself."
   fi
 else
   mkdir -p "$(dirname "$PIPCONF")"
-  cp snippets/pip.conf "$PIPCONF"
+  /usr/bin/sed "s/P7D/P${DAYS}D/" snippets/pip.conf > "$PIPCONF"
   echo "    pip.conf: $PIPCONF created"
 fi
 

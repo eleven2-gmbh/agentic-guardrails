@@ -9,7 +9,7 @@
 outside the product repository (it holds your organisation's facts); the generated
 policy.json and managed-settings.json are written next to the layers in that folder.
 
-Run after every change to one of them:
+Run after every change to one of them (./build.py --help lists every command):
 
     ./build.py [--config DIR]  writes policy.json and managed-settings.json
     ./build.py --check         only reports whether both are up to date (for tests/CI)
@@ -167,9 +167,10 @@ HELP = {
                             "Bash(gh gist *).",
     "logging.log_silent_tools": "Calls that are logged even when the hook lets them through "
                                 "silently (ssh, git-network).",
-    "package_protection.min_release_age_days": "Release-age window for packages in days. Only "
-                                               "recorded for now: the npm, pip, uv and Composer "
-                                               "settings (package_protection.env) still use 7 days.",
+    "package_protection.min_release_age_days": "Release-age window for packages in days: npm, "
+                                               "pip, uv and Composer install no release younger "
+                                               "than this (in Claude Code and, via install.sh, in "
+                                               "your terminal).",
     "package_protection.require_sfw": "Package installs only run through Socket Firewall (sfw).",
     "data_classes.secret_files.ask": "Whether reading a file that matches the secret patterns asks.",
     "data_classes.personal_files.ask": "Whether reading a file that matches the personal-data "
@@ -545,9 +546,26 @@ def effective(org_path=None, local_path=None, today=None):
     ids = policy["shadow_rules"]["ids"]
     policy["shadow_rules"]["ids"] = ids + [x for x in shadow if x not in ids]
     flatten_patterns(policy)
+    release_age_env(policy)
     out = {"note": [GENERATED], "version": 1}
     out.update(policy)
     return out
+
+
+# The package managers' own settings for the release-age window (design notes, 6), all
+# from package_protection.min_release_age_days, so a stricter window reaches every one.
+RELEASE_AGE_ENV = {"npm_config_min_release_age": "{}", "PIP_UPLOADED_PRIOR_TO": "P{}D",
+                   "UV_EXCLUDE_NEWER": "P{}D", "COMPOSER_POLICY_COOLDOWN_PERIOD": "{} days"}
+
+
+def release_age_env(policy):
+    pp = policy["package_protection"]
+    days = pp["min_release_age_days"]
+    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+        raise LayerError("package_protection.min_release_age_days: {!r} is not a whole number "
+                         "of days".format(days))
+    for key, fmt in RELEASE_AGE_ENV.items():
+        pp["env"][key] = fmt.format(days)
 
 
 def load():
@@ -1112,15 +1130,6 @@ def migrate(write=False):
     return changed
 
 
-def arg(name):
-    if name in sys.argv:
-        i = sys.argv.index(name)
-        if i + 1 < len(sys.argv):
-            return sys.argv[i + 1]
-        raise LayerError("{} needs a path".format(name))
-    return None
-
-
 def read_text(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -1134,60 +1143,177 @@ def use_config(folder):
     global CONFIG, POLICY, TARGET
     folder = os.path.abspath(os.path.expanduser(folder))
     if not os.path.isdir(folder):
-        raise LayerError("--config: {} is not a folder".format(folder))
+        raise LayerError("--config: {} is not a folder.\n"
+                         "  Create one:  ./build.py --init {}".format(folder, folder))
     CONFIG = folder
     POLICY = os.path.join(folder, "policy.json")
     TARGET = os.path.join(folder, "managed-settings.json")
 
 
-def main():
+EPILOG = """\
+examples:
+  ./build.py --init ~/my-guardrails             create a configuration folder
+  ./build.py --config ~/my-guardrails --diff    what would change
+  ./build.py --config ~/my-guardrails           write policy.json and managed-settings.json
+  ./build.py --config ~/my-guardrails --ui      the optional configuration UI
+  ./install.sh --config ~/my-guardrails         install (asks for sudo)
+
+exit codes: 0 done or up to date, 1 --check, --diff or --migrate found changes, 2 error.
+Must run on /usr/bin/python3 (3.9), standard library only. More: README.md, Configure."""
+
+
+def parser():
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="./build.py", allow_abbrev=False, epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Builds policy.json and managed-settings.json from baseline.json and the "
+                    "layers org.json and\nlocal.<host>.json of a configuration folder. Without "
+                    "a command it writes both into that folder.")
+    ap.add_argument("--version", action="store_true", help="show the product version and exit")
+    ap.add_argument("--config", metavar="DIR",
+                    help="configuration folder (default: config/ in this checkout)")
+    cmds = ap.add_argument_group("commands (at most one; without one: build)")
+    one = cmds.add_mutually_exclusive_group()
+    one.add_argument("--check", action="store_true",
+                     help="only report whether both files are up to date (for tests and CI)")
+    one.add_argument("--diff", action="store_true", help="show what would change in both files")
+    one.add_argument("--effective", action="store_true", help="print the merged policy")
+    one.add_argument("--audit", action="store_true",
+                     help="list Claude Code's own settings below managed; read only, run it in "
+                          "your own terminal")
+    one.add_argument("--describe", action="store_true",
+                     help="print the layer rules as JSON (for an editor or a UI)")
+    one.add_argument("--schema", action="store_true",
+                     help="print layer.schema.json, a JSON Schema of a layer for editors")
+    one.add_argument("--init", metavar="DIR",
+                     help="create org.json and local.<host>.json in DIR; never overwrites")
+    one.add_argument("--migrate", action="store_true",
+                     help="bring the layers to the current layer_format and renamed ids; shows "
+                          "a diff, writes only with --write")
+    one.add_argument("--ui", action="store_true",
+                     help="start the optional configuration UI on 127.0.0.1 (docs/config-ui.md)")
+    opts = ap.add_argument_group("options")
+    opts.add_argument("--org", metavar="FILE", help="another organisation layer (tests)")
+    opts.add_argument("--local", metavar="FILE",
+                      help="another machine layer than <config>/local.<host>.json")
+    opts.add_argument("--write", action="store_true", help="with --migrate: write the result")
+    opts.add_argument("--template", choices=TEMPLATES, help="with --init: empty (default) or "
+                                                            "example (a copy of examples/)")
+    opts.add_argument("--host", metavar="NAME",
+                      help="with --init: short host name (default: this machine)")
+    return ap
+
+
+def product_version():
+    tag = checkout_tag()
+    if tag:
+        return tag
+    import subprocess
     try:
-        if "--ui" in sys.argv:
+        r = subprocess.run(["git", "-C", HERE, "describe", "--tags", "--always", "--dirty"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           universal_newlines=True, timeout=10)
+        return r.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def need_folder():
+    """The configuration folder exists, else say how to get one."""
+    if os.path.isdir(CONFIG):
+        return
+    raise LayerError(
+        "no configuration folder: {}/ does not exist.\n"
+        "  Use your own folder:  ./build.py --config DIR\n"
+        "  or create one:        ./build.py --init DIR\n"
+        "  All commands:         ./build.py --help".format(shown(CONFIG)))
+
+
+def need_layers(org, local):
+    """The layers the build will read exist, else say what to do."""
+    if org is None:
+        need_folder()
+        if not os.path.exists(os.path.join(CONFIG, "org.json")):
+            raise LayerError(
+                "{} has no org.json.\n"
+                "  Create the layers:  ./build.py --init {}".format(shown(CONFIG), shown(CONFIG)))
+    if local is None and not os.path.exists(host_layer()):
+        others = [os.path.basename(f) for f in layer_files() if not f.endswith("org.json")]
+        raise LayerError(
+            "no machine layer for this machine ({}): {} missing.\n"
+            "  Copy {} and edit it, or create it in ./build.py --ui,\n"
+            "  or name another one:  --local FILE".format(
+                socket.gethostname().split(".")[0], shown(host_layer()),
+                ", ".join(others) if others else "examples/local.example.json"))
+
+
+def main(argv=None):
+    ap = parser()
+    a = ap.parse_args(argv)
+    if a.write and not a.migrate:
+        ap.error("--write only goes with --migrate")
+    if (a.template or a.host) and not a.init:
+        ap.error("--template and --host only go with --init")
+    if (a.org or a.local) and (a.init or a.migrate or a.describe or a.schema or a.ui):
+        ap.error("--org and --local only go with the build, --check, --diff, --effective "
+                 "and --audit")
+    if a.init and a.config:
+        ap.error("--init DIR names the folder itself; leave out --config")
+    if a.version:
+        print("agentic-guardrails {} (baseline {}, layer format {})".format(
+            product_version(), read_json(BASELINE)["baseline_version"], LAYER_FORMAT))
+        return 0
+    try:
+        if a.ui:
             # optional, and loaded only here: the build never depends on ui/
             import importlib.util
             spec = importlib.util.spec_from_file_location(
                 "guardrails_ui", os.path.join(HERE, "ui", "server.py"))
             ui = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(ui)
-            return ui.serve(sys.modules[__name__], arg("--config"))
-        if "--schema" in sys.argv:
+            return ui.serve(sys.modules[__name__], a.config)
+        if a.schema:
             sys.stdout.write(schema_text())
             return 0
-        if "--describe" in sys.argv:
+        if a.describe:
             sys.stdout.write(json.dumps(describe(), indent=2, ensure_ascii=False) + "\n")
             return 0
-        if arg("--init"):
-            for f in init(arg("--init"), arg("--template") or "empty", arg("--host")):
+        if a.init:
+            for f in init(a.init, a.template or "empty", a.host):
                 print("{} written".format(f))
-            print("  edit them, then: ./build.py --config {}".format(arg("--init")))
-            print("  pin the product: put the tag you build with (e.g. v1.2.3) into "
-                  "product-version there")
+            print("  edit them, then: ./build.py --config {}".format(a.init))
+            print("  pin the product: put the tag you build with ({}) into product-version "
+                  "there".format(checkout_tag() or "e.g. v1.2.3"))
             return 0
-        if arg("--config"):
-            use_config(arg("--config"))
-        if "--migrate" in sys.argv:
-            changed = migrate("--write" in sys.argv)
-            return 1 if changed and "--write" not in sys.argv else 0
-        p = effective(arg("--org"), arg("--local"))
+        if a.config:
+            use_config(a.config)
+        if a.migrate:
+            need_folder()
+            changed = migrate(a.write)
+            return 1 if changed and not a.write else 0
+        need_layers(a.org, a.local)
+        p = effective(a.org, a.local)
     except LayerError as e:
         print("ERROR: " + str(e), file=sys.stderr)
         return 2
-    if "--effective" in sys.argv:
+    if a.effective:
         sys.stdout.write(json.dumps(p, indent=2, ensure_ascii=False) + "\n")
         return 0
-    if "--audit" in sys.argv:
+    if a.audit:
         return audit(p)
     outputs = [(POLICY, json.dumps(p, indent=2, ensure_ascii=False) + "\n"),
                (TARGET, json.dumps(build(p), indent=2, ensure_ascii=False) + "\n")]
-    if "--check" in sys.argv:
+    if a.check:
         stale = [os.path.basename(f) for f, new in outputs if read_text(f) != new]
         if not stale:
             print("policy.json and managed-settings.json are up to date")
             return 0
-        print("{} {} from the layers: run ./build.py".format(" and ".join(stale),
-                                                    "differs" if len(stale) == 1 else "differ"))
+        print("{} {} from the layers: run ./build.py{}".format(
+            " and ".join(stale), "differs" if len(stale) == 1 else "differ",
+            " --config " + a.config if a.config else ""))
         return 1
-    if "--diff" in sys.argv:
+    if a.diff:
         import difflib
         changed = False
         for f, new in outputs:
@@ -1196,6 +1322,8 @@ def main():
                                           os.path.basename(f) + " (from the layers)"))
             sys.stdout.writelines(d)
             changed = changed or bool(d)
+        if not changed:
+            print("policy.json and managed-settings.json are up to date, nothing would change")
         return 1 if changed else 0
     for f, new in outputs:
         old = read_text(f)
@@ -1205,7 +1333,8 @@ def main():
         with open(f, "w", encoding="utf-8") as fh:
             fh.write(new)
         print("{} written{}".format(os.path.basename(f), "" if old else " (new)"))
-    print("  after changes, install them (install.sh, README: Install)")
+    print("  after changes, install them: ./install.sh{} (README: Install)".format(
+        " --config " + a.config if a.config else ""))
     return 0
 
 

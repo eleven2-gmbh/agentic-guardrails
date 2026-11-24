@@ -384,7 +384,7 @@
         },
         "package_protection.min_release_age_days": {
           "type": "integer",
-          "description": "Release-age window for packages in days. Only recorded for now: the npm, pip, uv and Composer settings (package_protection.env) still use 7 days. Stricter only: a higher number.\nBaseline: 7",
+          "description": "Release-age window for packages in days: npm, pip, uv and Composer install no release younger than this (in Claude Code and, via install.sh, in your terminal). Stricter only: a higher number.\nBaseline: 7",
           "minimum": 7
         },
         "package_protection.require_sfw": {
