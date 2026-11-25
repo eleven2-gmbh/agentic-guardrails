@@ -368,6 +368,46 @@ for snip, text in (("snippets/npmrc.txt", "min-release-age=7\n"), ("snippets/pip
           text in open(os.path.join(HERE, "..", snip), encoding="utf-8").read()
           and build.read_json(build.BASELINE)["policy"]["package_protection"]["min_release_age_days"] == 7)
 
+# --- read boundary and MCP list (design notes, 12) ------------------------------------
+P0, _ = merged()
+ms = build.build(P0, "darwin")
+fs = ms["sandbox"]["filesystem"]
+check("blockReadsOutsideWorkingDirectories is no longer written",
+      "blockReadsOutsideWorkingDirectories" not in ms["permissions"]
+      and ms["permissions"]["blockWritesOutsideWorkingDirectories"] is True)
+check("macOS: denyRead holds /Users and /Volumes",
+      {"/Users", "/Volumes"} <= set(fs["denyRead"]) and "/home" not in fs["denyRead"])
+check("macOS: the per-user cache folder is resolved, no placeholder left",
+      not any(x.startswith("@") for x in fs["denyRead"]))
+check("Linux: denyRead holds /home, /mnt, /media",
+      build.build(P0, "linux")["sandbox"]["filesystem"]["denyRead"] == ["/home", "/mnt", "/media"])
+work = [os.path.expanduser(d) for d in P0["working_directories"]["paths"]]
+check("allowRead: working directories first, absolute, no '.'",
+      fs["allowRead"][:len(work)] == work and "." not in fs["allowRead"]
+      and all(x.startswith(("/", "~/")) for x in fs["allowRead"]))
+check("allowRead: no folder that holds tokens",
+      not {"~/.npmrc", "~/.composer", "~/.config/git", "~/.bashrc", "~/.profile",
+           "~/.bash_profile"} & set(fs["allowRead"]))
+check("the hook also sees Read, Grep and Glob",
+      all(t in ms["hooks"]["PreToolUse"][0]["matcher"].split("|") for t in ("Read", "Grep", "Glob")))
+check("allowedMcpServers absent while restrict_servers is off", "allowedMcpServers" not in ms)
+p, err = merged(local_changes={"tighten": {"mcp.restrict_servers": True},
+                               "add": {"mcp.allowed_servers": ["docs"]}})
+check("restrict_servers writes allowedMcpServers by name " + (err or ""),
+      p is not None and build.build(p)["allowedMcpServers"] == [{"serverName": "docs"}])
+p, err = merged(local_changes={"add": {"read_boundary.macos": ["/opt/homebrew/var"]}})
+check("a layer cannot add to the boundary through add", p is None)
+p, err = merged(local_changes={"tighten": {"read_boundary.macos": ["/opt/homebrew/var"]}})
+check("a layer can widen the boundary through tighten " + (err or ""),
+      p is not None and "/opt/homebrew/var" in build.build(p, "darwin")["sandbox"]["filesystem"]["denyRead"])
+bad = copy.deepcopy(P0)
+bad["read_boundary"]["macos"].append("@nope")
+try:
+    build.build(bad, "darwin")
+    check("an unknown placeholder stops the build", False)
+except build.LayerError:
+    check("an unknown placeholder stops the build", True)
+
 # --- the command line behaves like one ------------------------------------------------
 import subprocess
 

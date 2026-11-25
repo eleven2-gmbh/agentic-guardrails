@@ -260,7 +260,10 @@
         "~/.kube",
         "~/.git-credentials",
         "~/.netrc",
-        "~/Library/Keychains"
+        "~/Library/Keychains",
+        "~/.composer/auth.json",
+        "~/.config/git/credentials",
+        "~/.npmrc"
       ],
       "read_deny": [
         "~/.ssh/id_*",
@@ -272,7 +275,10 @@
         "~/.kube/**",
         "~/.git-credentials",
         "~/.netrc",
-        "~/Library/Keychains/**"
+        "~/Library/Keychains/**",
+        "~/.composer/auth.json",
+        "~/.config/git/credentials",
+        "~/.npmrc"
       ],
       "env_vars": [
         "GITHUB_TOKEN",
@@ -318,20 +324,29 @@
       "gh_outside_sandbox": true
     },
     "sandbox": {
-      "note": "Folders package managers need inside the sandbox. build.py expands a leading ~ to the home of the user who builds.",
+      "note": [
+        "Paths inside the read boundary (read_boundary) that commands in the sandbox may",
+        "still read: tool caches, single configuration files, never whole folders that can",
+        "hold tokens (design notes, 12). ~/.npmrc and ~/.composer are not here on purpose:",
+        "the package protection comes through env, Composer runs outside the sandbox.",
+        "build.py expands a leading ~ to the home of the user who builds."
+      ],
       "allow_read": [
         "~/.nvm",
         "~/.npm",
-        "~/.npmrc",
         "~/Library/pnpm",
         "~/Library/Caches/pnpm",
         "~/Library/Preferences/pnpm",
         "~/Library/Caches/pip",
+        "~/Library/Python",
         "~/.cache/node",
         "~/.cache/prisma",
-        "~/.composer",
         "~/.ssh/config",
-        "~/.ssh/known_hosts"
+        "~/.ssh/known_hosts",
+        "~/.gitconfig",
+        "~/.config/git/ignore",
+        "~/.config/git/attributes",
+        "~/.claude/shell-snapshots"
       ],
       "allow_write": [
         "~/.npm",
@@ -342,6 +357,46 @@
         "~/.cache/prisma"
       ],
       "allow_unix_sockets": []
+    },
+    "read_boundary": {
+      "note": [
+        "Design notes 12. Where reading ends, for commands in the sandbox (denyRead) and for",
+        "Read, Grep and Glob (hooks/guard.py). Inside these roots only the working",
+        "directories, sandbox.allow_read and, for the file tools, file_tools_extra are",
+        "readable. Replaces blockReadsOutsideWorkingDirectories, whose static proof asked",
+        "for nearly every shell command. @darwin_user_cache_dir is the per-user cache",
+        "folder of all apps under /private/var/folders (getconf DARWIN_USER_CACHE_DIR).",
+        "The Linux list is generated but not yet tested (bubblewrap behaves differently)."
+      ],
+      "macos": [
+        "/Users",
+        "/Volumes",
+        "@darwin_user_cache_dir"
+      ],
+      "linux": [
+        "/home",
+        "/mnt",
+        "/media"
+      ],
+      "file_tools_extra": [
+        "~/.claude/CLAUDE.md",
+        "~/.claude/skills",
+        "~/.claude/agents",
+        "~/.claude/commands",
+        "~/.claude/plans",
+        "~/.claude/plugins",
+        "~/.claude/projects/*/memory"
+      ]
+    },
+    "mcp": {
+      "note": [
+        "Design notes 12. MCP servers run outside the sandbox with the user's rights. With",
+        "restrict_servers, managed settings allow only the servers in allowed_servers",
+        "(allowedMcpServers, by server name); an empty list then allows none. List the",
+        "servers in use first with ./build.py --audit."
+      ],
+      "restrict_servers": false,
+      "allowed_servers": []
     },
     "logging": {
       "note": [
@@ -384,10 +439,11 @@
         "a project brings along must be added here. Check first with ./build.py --audit.",
         "working_directories become permissions.additionalDirectories in managed settings.",
         "required_minimum_version: the oldest Claude Code that knows every key we set",
-        "(blockWritesOutsideWorkingDirectories needs 2.1.314)."
+        "(blockWritesOutsideWorkingDirectories needs 2.1.314; sandbox denyRead with allowRead",
+        "inside it, the read boundary of design notes 12, needs 2.1.329)."
       ],
       "lock_lower_scopes": true,
-      "required_minimum_version": "2.1.314"
+      "required_minimum_version": "2.1.329"
     },
     "install": {
       "note": [

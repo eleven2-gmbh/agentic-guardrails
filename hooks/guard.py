@@ -13,8 +13,9 @@ hosts, domains, working directories, data classes, package protection, logging. 
 read, which options start a program, how a dependency shows up in a manifest). A missing
 or broken policy makes the hook ask for everything.
 
-Checked tools: Bash, Monitor, PowerShell, BashOutput (shell commands), WebFetch, and
-Edit/Write/MultiEdit/NotebookEdit (files). Wrappers are stripped first (timeout, nice,
+Checked tools: Bash, Monitor, PowerShell, BashOutput (shell commands), WebFetch,
+Edit/Write/MultiEdit/NotebookEdit (files), and Read/Grep/Glob/NotebookRead/LS against the
+read boundary (design notes, 12). Wrappers are stripped first (timeout, nice,
 sudo, command ...), as Claude Code does before matching its own rules.
 
 Asks the user before:
@@ -76,6 +77,7 @@ under shadow_rules only logs instead of asking. scripts/guard-log.py evaluates i
 A log that cannot be written is ignored and never changes a decision.
 """
 import difflib
+import fnmatch
 import json
 import os
 import re
@@ -124,6 +126,7 @@ def apply_policy(p):
     """Put the values from policy.json into the module's globals."""
     global REQUIRE_SFW, SFW_WORKS_IN_SANDBOX, WEBFETCH_FREE, WEBFETCH_FREE_SUFFIXES
     global REMOTE_OWN_SUFFIXES, SECRET_FILE, PERSONAL_FILE, GIT_WORK_ROOTS, POLICY
+    global READ_DENY_ROOTS, READ_ALLOW, READ_ALLOW_FILE_TOOLS
     POLICY = p
     pp = p["package_protection"]
     REQUIRE_SFW = bool(pp["require_sfw"])
@@ -144,12 +147,150 @@ def apply_policy(p):
     PERSONAL_FILE = compile_patterns(dc["personal_files"])
     GIT_WORK_ROOTS = tuple(p["working_directories"]["paths"])
 
+    # read boundary (design notes, 12); a policy without it comes with
+    # blockReadsOutsideWorkingDirectories, so there is nothing to check here
+    rb = p.get("read_boundary") or {}
+    roots = rb.get("macos" if sys.platform == "darwin" else "linux") or []
+    READ_DENY_ROOTS = tuple(r for r in (boundary_root(x) for x in roots) if r)
+    READ_ALLOW = tuple(norm_path(x) for x in
+                       list(p["working_directories"]["paths"]) + p["sandbox"]["allow_read"])
+    READ_ALLOW_FILE_TOOLS = READ_ALLOW + tuple(
+        norm_path(x) for x in rb.get("file_tools_extra") or [])
+
 
 def compile_patterns(entry):
     """One regex from a data-class entry, or None when the class is switched off."""
     if not entry.get("ask", True) or not entry.get("patterns"):
         return None
     return re.compile("|".join("(?:%s)" % x for x in entry["patterns"]), re.I)
+
+# ------------------------------------------------------------ read boundary --
+# Design notes 12. The sandbox ends reading for shell commands (denyRead); Read, Grep and
+# Glob do not run in it, so the same boundary is checked here. Seatbelt sees through
+# symlinks, other case and the data-volume firmlink (tested 2026-11-25); a string
+# comparison does not, so every path is resolved and folded first.
+READ_DENY_ROOTS = ()
+READ_ALLOW = ()
+READ_ALLOW_FILE_TOOLS = ()
+FIRMLINK = "/System/Volumes/Data"
+FOLD = sys.platform == "darwin"  # APFS ignores case by default
+
+
+def norm_path(path, base=""):
+    """Absolute, symlinks and .. resolved, firmlink removed, case folded on macOS."""
+    p = os.path.expanduser(path)
+    if not os.path.isabs(p):
+        p = os.path.join(base or os.getcwd(), p)
+    p = os.path.realpath(p)
+    if p == FIRMLINK or p.startswith(FIRMLINK + "/"):
+        p = p[len(FIRMLINK):] or "/"
+    return p.casefold() if FOLD else p
+
+
+def boundary_root(entry):
+    if entry == "@darwin_user_cache_dir":
+        if sys.platform != "darwin":
+            return None
+        try:
+            d = os.confstr(65538)  # _CS_DARWIN_USER_CACHE_DIR
+        except (ValueError, OSError):
+            d = None
+        if not d:
+            raise ValueError("per-user cache folder unknown")  # fail closed
+        return norm_path(d)
+    if entry.startswith("@"):
+        raise ValueError("unknown placeholder " + entry)
+    return norm_path(entry)
+
+
+def under(p, pattern):
+    """p lies in pattern; * in a pattern stands for one folder name."""
+    if "*" not in pattern and "?" not in pattern and "[" not in pattern:
+        return within(p, pattern)
+    pp, parts = p.split("/"), pattern.split("/")
+    return len(pp) >= len(parts) and all(
+        fnmatch.fnmatchcase(a, b) for a, b in zip(pp, parts))
+
+
+def outside_read_boundary(path, base="", allow=None):
+    """The resolved path when it lies inside a boundary root and in no allowed path."""
+    p = norm_path(path, base)
+    if not any(within(p, r) for r in READ_DENY_ROOTS):
+        return None
+    if any(under(p, a) for a in (READ_ALLOW_FILE_TOOLS if allow is None else allow)):
+        return None
+    return p
+
+
+GLOB_CHARS = re.compile(r"[*?\[{]")
+
+
+def glob_base(pattern, path):
+    """The folder a glob pattern starts in, and whether it climbs out after a wildcard."""
+    parts = pattern.split("/")
+    lit = []
+    for i, c in enumerate(parts):
+        if GLOB_CHARS.search(c):
+            return "/".join(lit) or ("/" if pattern.startswith("/") else ""), \
+                ".." in parts[i:]
+        lit.append(c)
+    return "/".join(lit[:-1]) or ("/" if pattern.startswith("/") else ""), False
+
+
+def check_file_read(tool, inp, cwd):
+    """Read, Grep, Glob, NotebookRead, LS against the read boundary."""
+    if not READ_DENY_ROOTS:
+        return
+    base = cwd or os.getcwd()
+    paths = []
+    if tool in ("Read", "NotebookRead"):
+        paths.append(inp.get("file_path") or inp.get("notebook_path") or "")
+    elif tool in ("Grep", "LS"):
+        paths.append(inp.get("path") or base)
+    elif tool == "Glob":
+        root = inp.get("path") or base
+        pattern = inp.get("pattern") or ""
+        start, climbs = glob_base(os.path.expanduser(pattern), root)
+        if climbs:
+            deny(f"Glob pattern {pattern} climbs out with .. after a wildcard; the read "
+                 "boundary cannot be checked (design notes, 12).", "read.boundary")
+        paths.append(root)
+        if start:
+            paths.append(os.path.join(os.path.expanduser(root), start))
+    for path in paths:
+        if not path:
+            continue
+        p = outside_read_boundary(path, base)
+        if p:
+            deny(f"{tool} {path}: outside the read boundary (design notes, 12), neither in a "
+                 "working directory nor in sandbox.allow_read. Ask the user in words; a "
+                 "folder that belongs to the work goes into working_directories.",
+                 "read.boundary")
+            return
+
+
+PATHISH = re.compile(r"^(?:[\w.-]+=)?@?(?P<p>(?:~|/|\.\.?/)\S*)$")
+
+
+def outside_command_reads(segments, here, cwd, tool):
+    """A command that runs outside the sandbox (git network, gh) has no read boundary of
+    its own. Ask when the same command line reads through a substitution or names a path
+    behind the boundary (design notes, 12)."""
+    if not READ_DENY_ROOTS:
+        return
+    for w in segments:
+        for a in w[1:]:
+            a = a.split("=", 1)[1] if a.startswith("--") and "=" in a else a
+            m = PATHISH.match(a)
+            if not m or "://" in a:
+                continue
+            p = outside_read_boundary(m.group("p"), here or cwd, READ_ALLOW)
+            if p:
+                ask(f"{tool} runs outside the sandbox and the command names {m.group('p')}, "
+                    "behind the read boundary (design notes, 12). Please check.",
+                    "read.outside-sandbox")
+                return
+
 
 GH_READONLY = {
     ("repo", "view"), ("repo", "list"),
@@ -1911,12 +2052,15 @@ def strip_prefix_quiet(w):
 def check_bash(cmd, cwd):
     check_remote(cmd)
     git_net = False
+    outside = []  # tools on this line that run outside the sandbox
+    seen_words = []
     here = os.path.realpath(cwd) if cwd else None
     full, cmd = cmd, strip_heredocs(cmd)
     for seg in bash_segments(cmd):
         w, sfw = strip_prefix(seg)
         if not w:
             continue
+        seen_words.append(w)
         name = os_base(w[0])
         if name == "cd":
             # follow the working directory, so `cd <repo> && git pull` is judged there
@@ -1927,8 +2071,10 @@ def check_bash(cmd, cwd):
             if check_git(w, cwd, here):
                 git_net = True
                 SEEN.add("git-network")
+                outside.append("git")
         elif name in ("gh", "glab"):
             check_gh(w)
+            outside.append(name)
         else:
             check_pkg(w, sfw, cwd)
     # fallback for nested forms the parser misses, e.g. `bash -c "git push"`
@@ -1938,6 +2084,12 @@ def check_bash(cmd, cwd):
     if git_net and GIT_DANGER_ENV.search(cmd):
         ask("git environment variable (GIT_SSH_COMMAND, GIT_CONFIG_* …) with git outside the sandbox: "
             "can run commands. Please check.")
+    if outside:
+        if READ_DENY_ROOTS and re.search(r"\$\(|`|<\(", cmd):
+            ask(f"{outside[0]} runs outside the sandbox, and the command line fills in text "
+                "through $(…), `…` or <(…), which would then read without the read boundary "
+                "(design notes, 12). Please check.", "read.outside-sandbox")
+        outside_command_reads(seen_words, here, cwd, outside[0])
     check_bash_manifest_edit(full)  # a heredoc written into package.json counts
     check_env_commands(cmd)
 
@@ -2354,6 +2506,11 @@ def main():
     elif tool == "WebFetch":
         logged = inp.get("url", "")
         check_webfetch(logged)
+    elif tool in ("Read", "Grep", "Glob", "NotebookRead", "LS"):
+        logged = inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""
+        if tool == "Glob":
+            logged = (inp.get("path") or "") + " " + (inp.get("pattern") or "")
+        check_file_read(tool, inp, data.get("cwd") or "")
     elif tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         logged = inp.get("file_path") or inp.get("notebook_path") or ""
         check_file_edit(tool, inp)

@@ -16,6 +16,8 @@ Run after every change to one of them (./build.py --help lists every command):
     ./build.py --diff          shows what would change in both
     ./build.py --audit         lists Claude Code's own settings below managed (design notes, 9);
                                read only, run it in your own terminal
+    ./build.py --selftest      checks the read boundary (design notes, 12): in your terminal it
+                               lays out canary files, run by Claude Code it tries to reach them
     ./build.py --effective [--org F] [--local F]
                                prints the merged policy (tests use it with fixtures)
     --local F                  another machine layer than <config>/local.<host>.json
@@ -78,13 +80,14 @@ ADD_LISTS = {
     "domains.code_hosts", "domains.os_packages", "domains.documentation",
     "webfetch.extra_hosts", "ssh.hosts", "working_directories.paths",
     "patch_scan.projects", "sandbox.allow_read", "sandbox.allow_write",
-    "sandbox.allow_unix_sockets",
+    "sandbox.allow_unix_sockets", "read_boundary.file_tools_extra", "mcp.allowed_servers",
 }
 # Lists where an extra entry means more questions or more protection.
 TIGHTEN_LISTS = {
     "data_classes.secret_files.patterns", "data_classes.personal_files.patterns",
     "credentials.files", "credentials.read_deny", "credentials.env_vars",
     "always_ask.tools", "always_ask.extra_ask", "logging.log_silent_tools",
+    "read_boundary.macos", "read_boundary.linux",
 }
 # Single values and the direction that is stricter.
 TIGHTEN_VALUES = {
@@ -94,6 +97,7 @@ TIGHTEN_VALUES = {
     "data_classes.personal_files.ask": "true",
     "claude_code.lock_lower_scopes": "true",
     "claude_code.required_minimum_version": "higher-version",
+    "mcp.restrict_servers": "true",
 }
 # Values without a security direction: names, descriptions, paths, switches about the
 # environment. sfw_works_in_sandbox describes whether sfw runs in the sandbox (design notes, 6).
@@ -149,8 +153,9 @@ HELP = {
                                  "git network commands run there without a question.",
     "patch_scan.projects": "Projects /patch-check scans for outdated packages, relative to patch "
                            "scan root. Read only by the script, not by the hook.",
-    "sandbox.allow_read": "Extra paths commands in the sandbox may read (e.g. package caches). "
-                          "A leading ~ is your home folder.",
+    "sandbox.allow_read": "Paths inside the read boundary that commands in the sandbox may read "
+                          "(package caches, single config files). A leading ~ is your home "
+                          "folder. Never a folder that can hold tokens.",
     "sandbox.allow_write": "Extra paths commands in the sandbox may write (e.g. package caches).",
     "sandbox.allow_unix_sockets": "Unix sockets the sandbox may connect to, e.g. the ssh-agent "
                                   "socket.",
@@ -158,6 +163,18 @@ HELP = {
                                           "a matching file (also on a server) asks first.",
     "data_classes.personal_files.patterns": "Regular expressions for files with personal data "
                                             "(access and mail logs); reading one asks first.",
+    "read_boundary.macos": "Folders (macOS) where reading ends: inside them commands in the "
+                           "sandbox and Read, Grep, Glob only reach the working directories "
+                           "and the allow_read paths. @darwin_user_cache_dir is the per-user "
+                           "cache folder of all apps.",
+    "read_boundary.linux": "Folders (Linux) where reading ends, like read boundary macos. "
+                           "Generated, not yet tested on Linux.",
+    "read_boundary.file_tools_extra": "Further paths inside the read boundary that only Read, "
+                                      "Grep and Glob may read (Claude's memory, skills, plans); "
+                                      "* stands for one folder name.",
+    "mcp.restrict_servers": "Allow only the MCP servers in allowed servers (allowedMcpServers); "
+                            "with an empty list none starts.",
+    "mcp.allowed_servers": "Names of the MCP servers that may start while restrict servers is on.",
     "credentials.files": "Files and folders the sandbox hides from every command.",
     "credentials.read_deny": "Paths the Read tool is denied (permission rules Read(...)).",
     "credentials.env_vars": "Environment variables the sandbox removes from every command.",
@@ -657,7 +674,32 @@ def auto_mode_environment(p):
     ]
 
 
-def build(p):
+def darwin_user_cache_dir():
+    """/private/var/folders/<id>/C of the building user, None when unknown."""
+    try:
+        d = os.confstr(65538)  # _CS_DARWIN_USER_CACHE_DIR
+    except (ValueError, OSError):
+        d = None
+    return os.path.realpath(d) if d else None
+
+
+def read_boundary(p, system=None):
+    """The roots where reading ends on this system (design notes, 12), expanded.
+    hooks/guard.py resolves the same list the same way."""
+    system = system or sys.platform
+    rb = p["read_boundary"]
+    out = []
+    for entry in rb["macos"] if system == "darwin" else rb["linux"]:
+        if entry == "@darwin_user_cache_dir":
+            entry = darwin_user_cache_dir() if system == "darwin" else None
+        elif entry.startswith("@"):
+            raise LayerError("read_boundary: unknown placeholder {}".format(entry))
+        if entry:
+            out.append(os.path.expanduser(entry))
+    return dedup(out)
+
+
+def build(p, system=None):
     cred = p["credentials"]
     aa = p["always_ask"]
     tool_globs = ["Bash({} *)".format(t) for t in aa["tools"]]
@@ -672,7 +714,9 @@ def build(p):
         "note": GENERATED,
         "permissions": {
             "disableBypassPermissionsMode": "disable",
-            "blockReadsOutsideWorkingDirectories": True,
+            # reading ends at the sandbox's denyRead and, for Read/Grep/Glob, in the hook
+            # (design notes, 12); the static proof of blockReadsOutsideWorkingDirectories
+            # asked for nearly every shell command
             "blockWritesOutsideWorkingDirectories": True,
             # the working directories live in one place only (design notes, 9)
             "additionalDirectories": [os.path.expanduser(d)
@@ -689,7 +733,7 @@ def build(p):
             "SessionStart": [{"hooks": [{"type": "command", "command": HOOK}]}],
             "PreToolUse": [{
                 "matcher": "Bash|Monitor|PowerShell|BashOutput|WebFetch|Edit|Write|MultiEdit"
-                           "|NotebookEdit",
+                           "|NotebookEdit|Read|Grep|Glob|NotebookRead|LS",
                 "hooks": [{"type": "command", "command": HOOK}],
             }],
         },
@@ -701,7 +745,11 @@ def build(p):
             "excludedCommands": dedup(excluded),
             "filesystem": {
                 "allowManagedReadPathsOnly": lock,
-                "allowRead": p["sandbox"]["allow_read"],
+                "denyRead": read_boundary(p, system),
+                # absolute paths only, no ".": it could follow a cd (design notes, 12)
+                "allowRead": dedup([os.path.expanduser(d)
+                                    for d in p["working_directories"]["paths"]]
+                                   + p["sandbox"]["allow_read"]),
                 "allowWrite": p["sandbox"]["allow_write"],
             },
             "credentials": {
@@ -719,6 +767,8 @@ def build(p):
         },
         "autoMode": {"environment": auto_mode_environment(p)},
     }
+    if p["mcp"]["restrict_servers"]:
+        out["allowedMcpServers"] = [{"serverName": n} for n in p["mcp"]["allowed_servers"]]
     if cc.get("required_minimum_version"):
         out["requiredMinimumVersion"] = cc["required_minimum_version"]
     return out
@@ -832,7 +882,227 @@ def audit(p):
           "{read} allowRead entries".format(**total))
     print("Values that look like passwords or tokens are redacted; for env and "
           "other keys only the names are shown.")
+    mcp_audit(p)
     return 0
+
+
+def mcp_servers(p):
+    """{server name: [where it is configured]} from ~/.claude.json and .mcp.json files."""
+    found = {}
+
+    def add(names, where):
+        for n in names or {}:
+            found.setdefault(n, []).append(where)
+    user = os.path.expanduser("~/.claude.json")
+    try:
+        with open(user, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    add(cfg.get("mcpServers"), "~/.claude.json")
+    for proj, pc in (cfg.get("projects") or {}).items():
+        if isinstance(pc, dict):
+            add(pc.get("mcpServers"), "~/.claude.json, project " + proj)
+    for root in p["working_directories"]["paths"] + [os.getcwd()]:
+        path = os.path.join(os.path.expanduser(root), ".mcp.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                add((json.load(f) or {}).get("mcpServers"), path)
+        except (OSError, ValueError):
+            pass
+    return found
+
+
+def mcp_audit(p):
+    m = p["mcp"]
+    allowed = set(m["allowed_servers"])
+    print("\nMCP servers (mcp.restrict_servers is {}):".format(
+        "on" if m["restrict_servers"] else "off"))
+    servers = mcp_servers(p)
+    for name in sorted(servers):
+        state = "in allowed_servers" if name in allowed else "NOT in allowed_servers"
+        print("   {}   [{}]   {}".format(name, state, "; ".join(servers[name])))
+    if not servers:
+        print("   none configured in ~/.claude.json or .mcp.json (claude.ai connectors and "
+              "the IDE server are not listed there)")
+
+
+# --------------------------------------------------------------- selftest --
+# The read boundary (design notes, 12) depends on how Claude Code turns denyRead and
+# allowRead into a Seatbelt profile, and that changed between versions. --selftest checks
+# it after every update. In the user's terminal it lays out canary files (random text, no
+# secret) in places the boundary must hide; run by Claude Code inside the sandbox it tries
+# to reach them and the places that must stay readable.
+
+CANARY = ".agentic-guardrails-canary"
+
+
+def canary_dirs(p):
+    """Folders inside the read boundary that are neither working directories nor allowed."""
+    home = os.path.expanduser("~")
+    dirs = [os.path.join(home, x) for x in ("Downloads", "Documents", "Library", ".config",
+                                            ".claude")]
+    if sys.platform == "darwin" and darwin_user_cache_dir():
+        dirs.append(darwin_user_cache_dir())
+    return [d for d in dirs if os.path.isdir(d)]
+
+
+def in_sandbox():
+    """True when writing to the home folder is refused, as the sandbox does."""
+    probe = os.path.join(os.path.expanduser("~"), ".agentic-guardrails-probe")
+    try:
+        with open(probe, "w"):
+            pass
+    except PermissionError:
+        return True
+    os.unlink(probe)
+    return False
+
+
+def aliases(path):
+    """The same file under other names: upper case (APFS ignores case), the data-volume
+    firmlink, a .. detour."""
+    out = [("path", path)]
+    if sys.platform == "darwin":
+        out.append(("other case", path.upper() if path != path.upper() else path.lower()))
+        out.append(("firmlink", "/System/Volumes/Data" + path))
+    d, b = os.path.split(path)
+    out.append((".. detour", os.path.join(d, "..", os.path.basename(d), b)))
+    return out
+
+
+def selftest(p):
+    if not in_sandbox():
+        made = 0
+        for d in canary_dirs(p):
+            f = os.path.join(d, CANARY)
+            if not os.path.exists(f):
+                with open(f, "w", encoding="utf-8") as fh:
+                    fh.write("agentic-guardrails canary {}, no secret\n".format(
+                        os.urandom(8).hex()))
+                made += 1
+            print("canary  " + f)
+        print("\n{} new canary files. This terminal is outside the sandbox, so nothing was "
+              "tested.\nNow let Claude Code run the same command (it runs in the sandbox), and "
+              "ask it to open one canary\nwith the Read tool: the hook must refuse it.".format(made))
+        return 0
+    fails = []
+
+    def result(label, ok, detail=""):
+        print("{}  {}{}".format("ok  " if ok else "FAIL", label, "  " + detail if detail else ""))
+        if not ok:
+            fails.append(label)
+
+    def readable(path):
+        try:
+            if os.path.isdir(path):
+                os.listdir(path)
+            else:
+                with open(path, "rb") as fh:
+                    fh.read(1)
+            return True, ""
+        except OSError as e:
+            return False, e.strerror or type(e).__name__
+
+    # the managed settings that apply
+    try:
+        with open(os.path.join(SYS_DIR, "managed-settings.json"), encoding="utf-8") as f:
+            ms = json.load(f)
+    except (OSError, ValueError) as e:
+        ms = {}
+        result("managed settings readable", False, str(e))
+    deny = ((ms.get("sandbox") or {}).get("filesystem") or {}).get("denyRead") or []
+    want = read_boundary(p)
+    result("managed settings carry the read boundary", set(want) <= set(deny),
+           "missing: " + ", ".join(sorted(set(want) - set(deny))) if set(want) - set(deny)
+           else "")
+    result("blockReadsOutsideWorkingDirectories is gone",
+           "blockReadsOutsideWorkingDirectories" not in (ms.get("permissions") or {}))
+
+    # must be hidden
+    # The boundary refuses even lstat (EPERM, tested 2026-11-25), so os.path.lexists says
+    # False for a hidden canary. Only ENOENT means it is missing.
+    canaries = [os.path.join(d, CANARY) for d in canary_dirs(p)]
+    present, missing = [], []
+    for c in canaries:
+        try:
+            os.lstat(c)
+            present.append(c)
+        except FileNotFoundError:
+            missing.append(c)
+        except OSError:
+            present.append(c)
+    for c in missing:
+        result("canary file present: " + c, False,
+               "run ./build.py --selftest in your terminal first")
+    if not canaries:
+        result("canary files present", False, "no hidden folder found to test")
+    for c in present:
+        for kind, alias in aliases(c):
+            ok, why = readable(alias)
+            result("hidden ({}): {}".format(kind, alias), not ok, why)
+        link = os.path.join(os.environ.get("TMPDIR") or "/tmp", "agr-selftest-link")
+        try:
+            if os.path.lexists(link):
+                os.unlink(link)
+            os.symlink(c, link)
+            ok, why = readable(link)
+            result("hidden (symlink in $TMPDIR): " + c, not ok, why)
+        finally:
+            if os.path.lexists(link):
+                os.unlink(link)
+        here = os.getcwd()
+        try:
+            os.chdir(os.path.dirname(c))
+            ok, why = readable(CANARY)
+        except OSError as e:
+            ok, why = False, e.strerror
+        finally:
+            os.chdir(here)
+        result("hidden (relative after cd): " + c, not ok, why)
+    for d in ("/Volumes", os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")):
+        if os.path.isdir(d):
+            ok, why = readable(d)
+            result("hidden (listing): " + d, not ok, why)
+
+    # must stay readable
+    for d in p["working_directories"]["paths"]:
+        d = os.path.expanduser(d)
+        if os.path.isdir(d):
+            ok, why = readable(d)
+            result("readable (working directory): " + d, ok, why)
+    for d in p["sandbox"]["allow_read"]:
+        d = os.path.expanduser(d)
+        if os.path.exists(d):
+            ok, why = readable(d)
+            result("readable (allow_read): " + d, ok, why)
+    tmp = os.environ.get("TMPDIR") or ""
+    if tmp:
+        f = os.path.join(tmp, "agr-selftest.txt")
+        try:
+            with open(f, "w") as fh:
+                fh.write("x")
+            with open(f) as fh:
+                ok = fh.read() == "x"
+            os.unlink(f)
+            result("write and read in $TMPDIR", ok)
+        except OSError as e:
+            result("write and read in $TMPDIR", False, e.strerror)
+    import subprocess
+    for cmd in (["git", "config", "--global", "--get", "core.excludesfile"],
+                ["git", "log", "-1", "--format=%h"], ["npm", "config", "get", "registry"]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print("skip  {}  ({})".format(" ".join(cmd), type(e).__name__))
+            continue
+        blocked = "Operation not permitted" in r.stderr or "EPERM" in r.stderr
+        result("runs: " + " ".join(cmd), not blocked, r.stderr.strip()[:120] if blocked else "")
+    print("\n{} failures. Known limits (design notes, 12): stat on a hidden folder still "
+          "answers, a hidden file\nshows that it exists (EPERM, not ENOENT), and the "
+          "scratchpads of other sessions under\n/private/tmp/claude-<uid> stay "
+          "readable.".format(len(fails)))
+    return 1 if fails else 0
 
 
 # ------------------------------------------------- describe, init, migrate --
@@ -1191,6 +1461,9 @@ def parser():
     one.add_argument("--migrate", action="store_true",
                      help="bring the layers to the current layer_format and renamed ids; shows "
                           "a diff, writes only with --write")
+    one.add_argument("--selftest", action="store_true",
+                     help="check the read boundary: in your terminal lay out canary files, "
+                          "run by Claude Code (sandbox) try to reach them (design notes, 12)")
     one.add_argument("--ui", action="store_true",
                      help="start the optional configuration UI on 127.0.0.1 (docs/config-ui.md)")
     opts = ap.add_argument_group("options")
@@ -1302,6 +1575,8 @@ def main(argv=None):
         return 0
     if a.audit:
         return audit(p)
+    if a.selftest:
+        return selftest(p)
     outputs = [(POLICY, json.dumps(p, indent=2, ensure_ascii=False) + "\n"),
                (TARGET, json.dumps(build(p), indent=2, ensure_ascii=False) + "\n")]
     if a.check:

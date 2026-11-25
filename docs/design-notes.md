@@ -157,3 +157,54 @@ agent to the remote host, even for a command that only reads.
 - `autoMode`, hooks and `env` in the user settings are outside the managed lock (see 9).
   Changes by Claude ask and `autoMode` entries are reported at session start, but a
   change made outside Claude, or approved by mistake, applies until it is noticed.
+- Read boundary (12): `stat` on a hidden folder still answers (existence, times), only
+  its listing is refused. A hidden file refuses `stat` too, but with EPERM where a missing
+  one gives ENOENT, so the existence of a known file name leaks, not its size or times
+  (tested 2026-11-25). A hard link made outside the sandbox (by the user, an
+  excluded command, a hook) makes a hidden file readable under an allowed path. The
+  scratchpads of every session and project under `/private/tmp/claude-<uid>` stay
+  readable, because `$TMPDIR` is that folder and there is no per-session path to allow.
+  The ssh-agent socket lets a command in the sandbox sign with the loaded keys; only the
+  network allowlist limits where to. The Linux paths are generated but not tested.
+
+## 12. The read boundary
+
+Decided 2026-11-25, after an external review. `blockReadsOutsideWorkingDirectories` made
+Claude Code prove before every shell command that it only reads inside the working
+directories. For heredocs, `python3 -c`, `cd` chains, pipes and globs that proof fails,
+and the question that follows skips auto mode: in a measured session 23 of 38 commands
+asked, none of them reached foreign data, and the questions were confirmed unread. So the
+boundary moved into the operating system:
+
+- `read_boundary.macos` (`/Users`, `/Volumes`, the per-user cache folder of all apps)
+  becomes the sandbox's `denyRead`; on Linux `/home`, `/mnt`, `/media`. Inside, only the
+  working directories and `sandbox.allow_read` are readable (`allowRead`). Everything
+  else in the home folder is hidden: other projects, `~/Downloads`, `~/Desktop`,
+  `~/Library` beyond the caches, `~/.config` beyond git, `~/.claude` beyond the shell
+  snapshots, shell histories, other users, external disks.
+- The working directories are written as absolute paths, never `.`: resolved per
+  command, `.` could follow a `cd` out of the project. A repository that is not in
+  `working_directories` is not readable in the sandbox; it has to be added.
+- `allow_read` holds single files and caches, never a folder that can hold tokens
+  (`~/.npmrc`, `~/.composer`, `~/.config/git`, the shell rc files). A deny inside an allowed
+  folder is not relied on: the sandbox knows only "deny, allow within deny".
+- Read, Grep, Glob, NotebookRead and LS do not run in the sandbox. The hook applies the
+  same boundary to them and denies, after resolving symlinks and `..`, removing the
+  `/System/Volumes/Data` firmlink and folding case (APFS ignores it; Seatbelt resolves
+  all of these by itself, tested 2026-11-25). A Glob pattern is checked from its literal
+  start; `..` after a wildcard is denied. `read_boundary.file_tools_extra` lets the file
+  tools reach Claude's own memory, skills and plans, not the transcripts of other sessions.
+- git network commands and `gh` run outside the sandbox (4). On a command line with one
+  of them, a substitution (`$(…)`, `` `…` ``, `<(…)`) or a path behind the boundary asks.
+- `credentials` and `read_deny` stay as a second layer where no allowed path covers them.
+- `build.py --selftest` checks the boundary after every Claude Code update: in the user's
+  terminal it lays out canary files (random text, no secret) in hidden folders, run by
+  Claude Code in the sandbox it tries them through other case, the firmlink, a symlink,
+  `..` and a relative path after `cd`, and checks that the working directories, the
+  allowed paths, `$TMPDIR`, git and npm still work. Tests use canaries, never real keys.
+- `mcp.restrict_servers` turns on `allowedMcpServers`: MCP servers run outside the sandbox
+  with the user's rights, so only listed servers may start (`--audit` lists them).
+
+Decided against: letting "read-only" subcommands of hcloud, az, brew and composer through
+without a question. Reading can still send data out (`az rest --url …?d=<data>`), and
+these tools run outside the sandbox and its proxy.

@@ -12,7 +12,7 @@ Maintained by [eleven2 gmbh](https://www.eleven2.de).
 
 | Layer | What it enforces | Where |
 |---|---|---|
-| Managed settings | bypass mode off; reads and writes outside the working directories blocked; credential files denied; `ask` for `git push`, cloud CLIs, gists; only managed hooks, only managed permission rules and sandbox read paths | `managed-settings.json`, generated, root-owned |
+| Managed settings | bypass mode off; writes outside the working directories blocked; reading ends at the read boundary (sandbox `denyRead` plus the hook for Read/Grep/Glob, design notes 12); credential files denied; `ask` for `git push`, cloud CLIs, gists; only managed hooks, only managed permission rules and sandbox read paths | `managed-settings.json`, generated, root-owned |
 | Sandbox | every Bash command runs in Seatbelt; network only to an allowlist (registries, code hosts, documentation, the organisation's own domains); ssh through the sandbox proxy, so the allowlist holds for ssh too | `managed-settings.json`, `bin/ssh-proxy.py` |
 | Hook | reads each command: git network options that start programs, `git push` in any spelling, `gh` writes, ssh commands that change a server or let data leave it, reads of secrets and logs with personal data on servers, package installs without Socket Firewall, dependency changes in manifests, project settings that open outside folders | `hooks/guard.py` |
 | Package protection | installs only through [Socket Firewall](https://socket.dev), a release-age window of 7 days for npm, pip, uv and Composer, no install scripts, wheels only | `baseline.json`, `snippets/` |

@@ -747,6 +747,74 @@ check("Policy kaputt -> ask", ask_on_policy(BROKEN) == "ask")
 check("policy incomplete -> ask", ask_on_policy(EMPTY) == "ask")
 check("Policy in Ordnung -> still", ask_on_policy(POLICY) == "silent")
 
+# --- read boundary for Read/Grep/Glob and commands outside the sandbox (design notes, 12)
+# A temporary folder stands in for /Users, so the test never touches the real home.
+BOUND = os.path.realpath(tempfile.mkdtemp(prefix="guardbound-"))
+B_WORK, B_ALLOWED, B_OTHER = (os.path.join(BOUND, n) for n in ("work", "cache", "Downloads"))
+B_MEM = os.path.join(BOUND, "claude", "projects", "p1", "memory")
+for d in (B_WORK, B_ALLOWED, B_OTHER, B_MEM, os.path.join(BOUND, "claude", "projects", "p1")):
+    os.makedirs(d, exist_ok=True)
+os.symlink(B_OTHER, os.path.join(B_WORK, "link-out"))
+RB = policy_copy("policy_bound.json",
+                 read_boundary__macos=[BOUND], read_boundary__linux=[BOUND],
+                 read_boundary__file_tools_extra=[os.path.join(BOUND, "claude/projects/*/memory")],
+                 sandbox__allow_read=[B_ALLOWED])
+_rb = json.load(open(RB))
+_rb["working_directories"]["paths"] = [B_WORK]
+with open(RB, "w") as f:
+    json.dump(_rb, f)
+
+
+def rb(tool, inp, cwd=B_WORK):
+    return decide(json.dumps({"tool_name": tool, "cwd": cwd, "tool_input": inp}), RB)[0]
+
+
+READS = [
+    ("Read", {"file_path": os.path.join(B_WORK, "a.txt")}, "silent"),
+    ("Read", {"file_path": os.path.join(B_OTHER, "a.pdf")}, "deny"),
+    ("Read", {"file_path": os.path.join(B_WORK, "..", "Downloads", "a")}, "deny"),
+    ("Read", {"file_path": "../Downloads/a"}, "deny"),
+    ("Read", {"file_path": os.path.join(B_WORK, "link-out", "a")}, "deny"),
+    ("Read", {"file_path": os.path.join(B_ALLOWED, "x")}, "silent"),
+    ("Read", {"file_path": os.path.join(B_MEM, "MEMORY.md")}, "silent"),
+    ("Read", {"file_path": os.path.join(BOUND, "claude", "projects", "p1", "s.jsonl")}, "deny"),
+    ("Read", {"file_path": os.path.join(PROJ, "package.json")}, "silent"),  # outside the roots
+    ("NotebookRead", {"notebook_path": os.path.join(B_OTHER, "n.ipynb")}, "deny"),
+    ("Grep", {"pattern": "x"}, "silent"),
+    ("Grep", {"pattern": "x", "path": B_OTHER}, "deny"),
+    ("Grep", {"pattern": "x", "path": BOUND}, "deny"),
+    ("LS", {"path": B_OTHER}, "deny"),
+    ("Glob", {"pattern": "**/*.md"}, "silent"),
+    ("Glob", {"pattern": "src/**/*.ts", "path": B_WORK}, "silent"),
+    ("Glob", {"pattern": BOUND + "/**/package.json"}, "deny"),
+    ("Glob", {"pattern": "../Downloads/*"}, "deny"),
+    ("Glob", {"pattern": "src/*/../../../Downloads/x"}, "deny"),
+    ("Glob", {"pattern": "*.pdf", "path": B_OTHER}, "deny"),
+    ("Bash", {"command": "git fetch origin"}, "silent"),
+    ("Bash", {"command": "gh pr view 3"}, "silent"),
+    ("Bash", {"command": "gh api repos/a/b?q=$(cat " + B_OTHER + "/a)"}, "ask"),
+    ("Bash", {"command": "gh api repos/a/b -H 'X: `id`'"}, "ask"),
+    ("Bash", {"command": "gh release view v1 && cat " + B_OTHER + "/a"}, "ask"),
+    ("Bash", {"command": "git -C " + B_WORK + " pull"}, "silent"),
+    ("Bash", {"command": "cat " + B_OTHER + "/a"}, "silent"),  # the sandbox ends it
+    ("Bash", {"command": "git log $(git rev-parse HEAD)"}, "silent"),  # not outside
+]
+if sys.platform == "darwin":  # APFS ignores case; the firmlink names the same folder
+    READS += [
+        ("Read", {"file_path": B_OTHER.upper() + "/A.PDF"}, "deny"),
+        ("Read", {"file_path": "/System/Volumes/Data" + B_OTHER + "/a"}, "deny"),
+        ("Read", {"file_path": B_WORK.upper() + "/a.txt"}, "silent"),
+    ]
+for tool, inp, want in READS:
+    got = rb(tool, inp)
+    check(f"read boundary: {tool} {json.dumps(inp)[-60:]} -> {want} (got {got})", got == want)
+check("read boundary: policy without the section -> no file-tool check",
+      decide(json.dumps({"tool_name": "Read", "cwd": PROJ,
+                         "tool_input": {"file_path": "/Users/x/Downloads/a"}}),
+             policy_copy("policy_nobound.json", read_boundary__macos=[],
+                         read_boundary__linux=[]))[0] == "silent")
+shutil.rmtree(BOUND)
+
 # --- decision log and shadow mode ----------------------------------------------------
 
 
