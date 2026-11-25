@@ -214,7 +214,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Paths inside the read boundary that commands in the sandbox may read (package caches, single config files). A leading ~ is your home folder. Never a folder that can hold tokens.\nBaseline: [\"~/.nvm\", \"~/.npm\", \"~/Library/pnpm\", \"~/Library/Caches/pnpm\", \"~/Library/Preferences/pnpm\", \"~/Library/Caches/pip\", \"~/Library/Python\", \"~/.cache/node\", \"~/.cache/prisma\", \"~/.ssh/config\", \"~/.ssh/known_hosts\", \"~/.gitconfig\", \"~/.config/git/ignore\", \"~/.config/git/attributes\", \"~/.claude/shell-snapshots\"]"
+          "description": "Paths inside the read boundary that commands in the sandbox may read (package caches, single config files). A leading ~ is your home folder, a leading @darwin_user_temp_dir (or another per-user placeholder of read boundary macos) that folder. Never a folder that can hold tokens.\nBaseline: [\"~/.nvm\", \"~/.npm\", \"~/Library/pnpm\", \"~/Library/Caches/pnpm\", \"~/Library/Preferences/pnpm\", \"~/Library/Caches/pip\", \"~/Library/Python\", \"~/.cache/node\", \"~/.cache/prisma\", \"~/.ssh/config\", \"~/.ssh/known_hosts\", \"~/.gitconfig\", \"~/.config/git/ignore\", \"~/.config/git/attributes\", \"@darwin_user_temp_dir/xcrun_db\", \"~/.claude/shell-snapshots\"]"
         },
         "sandbox.allow_unix_sockets": {
           "type": "array",
@@ -393,7 +393,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Folders (macOS) where reading ends: inside them commands in the sandbox and Read, Grep, Glob only reach the working directories and the allow_read paths. @darwin_user_cache_dir is the per-user cache folder of all apps.\nBaseline: [\"/Users\", \"/Volumes\", \"@darwin_user_cache_dir\"]"
+          "description": "Folders (macOS) where reading ends: inside them commands in the sandbox and Read, Grep, Glob only reach the working directories and the allow_read paths. @darwin_user_dir, @darwin_user_temp_dir and @darwin_user_cache_dir are the per-user data, temporary and cache folders of all apps (/private/var/folders/<id>/0, T, C).\nBaseline: [\"/Users\", \"/Volumes\", \"@darwin_user_dir\", \"@darwin_user_temp_dir\", \"@darwin_user_cache_dir\"]"
         },
         "claude_code.lock_lower_scopes": {
           "type": "boolean",
@@ -582,6 +582,9 @@
               "read_boundary.macos:/Users",
               "read_boundary.macos:/Volumes",
               "read_boundary.macos:@darwin_user_cache_dir",
+              "read_boundary.macos:@darwin_user_dir",
+              "read_boundary.macos:@darwin_user_temp_dir",
+              "sandbox.allow_read:@darwin_user_temp_dir/xcrun_db",
               "sandbox.allow_read:~/.cache/node",
               "sandbox.allow_read:~/.cache/prisma",
               "sandbox.allow_read:~/.claude/shell-snapshots",

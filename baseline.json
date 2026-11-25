@@ -329,7 +329,10 @@
         "still read: tool caches, single configuration files, never whole folders that can",
         "hold tokens (design notes, 12). ~/.npmrc and ~/.composer are not here on purpose:",
         "the package protection comes through env, Composer runs outside the sandbox.",
-        "build.py expands a leading ~ to the home of the user who builds."
+        "build.py expands a leading ~ to the home of the user who builds, a leading",
+        "@darwin_user_temp_dir to that folder. xcrun_db there is the tool cache of the Xcode",
+        "shims /usr/bin/python3 and /usr/bin/git (paths of developer tools, no data); without",
+        "it every call starts xcodebuild, takes 1.7 s and reports EPERM (v1.1.4)."
       ],
       "allow_read": [
         "~/.nvm",
@@ -346,6 +349,7 @@
         "~/.gitconfig",
         "~/.config/git/ignore",
         "~/.config/git/attributes",
+        "@darwin_user_temp_dir/xcrun_db",
         "~/.claude/shell-snapshots"
       ],
       "allow_write": [
@@ -364,13 +368,16 @@
         "Read, Grep and Glob (hooks/guard.py). Inside these roots only the working",
         "directories, sandbox.allow_read and, for the file tools, file_tools_extra are",
         "readable. Replaces blockReadsOutsideWorkingDirectories, whose static proof asked",
-        "for nearly every shell command. @darwin_user_cache_dir is the per-user cache",
-        "folder of all apps under /private/var/folders (getconf DARWIN_USER_CACHE_DIR).",
+        "for nearly every shell command. @darwin_user_dir, @darwin_user_temp_dir and",
+        "@darwin_user_cache_dir are the per-user data, temporary and cache folders of all",
+        "apps under /private/var/folders (getconf DARWIN_USER_DIR, _TEMP_DIR, _CACHE_DIR).",
         "The Linux list is generated but not yet tested (bubblewrap behaves differently)."
       ],
       "macos": [
         "/Users",
         "/Volumes",
+        "@darwin_user_dir",
+        "@darwin_user_temp_dir",
         "@darwin_user_cache_dir"
       ],
       "linux": [

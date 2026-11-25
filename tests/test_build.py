@@ -198,10 +198,19 @@ def read_with_rename(path):
 
 
 build.read_json = read_with_rename
-p, err = merged(local_changes=exc(id="personal.alt-access"))
+# the hint goes to stderr; caught here so it does not read like a note about the own
+# configuration in the output of install.sh
+import contextlib
+import io
+_hint = io.StringIO()
+with contextlib.redirect_stderr(_hint):
+    p, err = merged(local_changes=exc(id="personal.alt-access"))
 build.read_json = orig_read
 check("renamed id maps to the new one " + (err or ""), p is not None
       and not any("access" in x for x in p["data_classes"]["personal_files"]["patterns"]))
+check("renamed id: the hint names the new id and --migrate",
+      "personal.alt-access is now called personal.access-log" in _hint.getvalue()
+      and "--migrate" in _hint.getvalue())
 
 # --- layer_format: missing means 1, newer than the product stops ----------------
 p, err = merged(local_changes={"layer_format": 1})
@@ -377,8 +386,24 @@ check("blockReadsOutsideWorkingDirectories is no longer written",
       and ms["permissions"]["blockWritesOutsideWorkingDirectories"] is True)
 check("macOS: denyRead holds /Users and /Volumes",
       {"/Users", "/Volumes"} <= set(fs["denyRead"]) and "/home" not in fs["denyRead"])
-check("macOS: the per-user cache folder is resolved, no placeholder left",
+check("macOS: the per-user folders are resolved, no placeholder left",
       not any(x.startswith("@") for x in fs["denyRead"]))
+if sys.platform == "darwin":
+    check("macOS: denyRead holds the per-user folders 0, T and C",
+          all(os.path.realpath(os.confstr(k)) in fs["denyRead"] for k in (65536, 65537, 65538)))
+    check("macOS: allowRead holds exactly the xcrun cache in T, expanded",
+          os.path.join(os.path.realpath(os.confstr(65537)), "xcrun_db") in fs["allowRead"]
+          and not any(x.startswith("@") for x in fs["allowRead"]))
+check("Linux: an allow_read entry with a per-user placeholder is dropped",
+      not any("xcrun_db" in x or x.startswith("@")
+              for x in build.build(P0, "linux")["sandbox"]["filesystem"]["allowRead"]))
+bad = copy.deepcopy(P0)
+bad["sandbox"]["allow_read"].append("@nope/x")
+try:
+    build.build(bad, "darwin")
+    check("an unknown placeholder in allow_read stops the build", False)
+except build.LayerError:
+    check("an unknown placeholder in allow_read stops the build", True)
 check("Linux: denyRead holds /home, /mnt, /media",
       build.build(P0, "linux")["sandbox"]["filesystem"]["denyRead"] == ["/home", "/mnt", "/media"])
 work = [os.path.expanduser(d) for d in P0["working_directories"]["paths"]]

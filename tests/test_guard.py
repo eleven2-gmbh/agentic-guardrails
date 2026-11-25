@@ -13,6 +13,12 @@ GUARD = os.path.join(HERE, "..", "hooks", "guard.py")
 # tests/test_config.py checks that one.
 BUILD = os.path.join(HERE, "..", "build.py")
 
+# The per-user folders under /private/var/folders (the terminal's default $TMPDIR) lie
+# behind the read boundary of the baseline (design notes, 12), so the test folders go to
+# /tmp there; in the sandbox $TMPDIR is already below /tmp.
+if os.path.realpath(tempfile.gettempdir()).startswith("/private/var/folders/"):
+    tempfile.tempdir = "/tmp"
+
 # temporary project: vite installed locally, a package.json, requirements.txt, pyproject
 PROJ = tempfile.mkdtemp(prefix="guardtest-")
 _eff = subprocess.run([sys.executable, "-I", BUILD, "--effective",
@@ -813,6 +819,21 @@ check("read boundary: policy without the section -> no file-tool check",
                          "tool_input": {"file_path": "/Users/x/Downloads/a"}}),
              policy_copy("policy_nobound.json", read_boundary__macos=[],
                          read_boundary__linux=[]))[0] == "silent")
+if sys.platform == "darwin":  # the per-user folders of all apps, 0, T and C
+    _ud = policy_copy("policy_userdirs.json", read_boundary__macos=[
+        "@darwin_user_dir", "@darwin_user_temp_dir", "@darwin_user_cache_dir"],
+        sandbox__allow_read=["@darwin_user_temp_dir/xcrun_db"])
+    check("read boundary: the xcrun cache in T stays readable",
+          decide(json.dumps({"tool_name": "Read", "cwd": PROJ, "tool_input": {
+              "file_path": os.path.join(os.confstr(65537), "xcrun_db")}}), _ud)[0] == "silent")
+    for _name, _key in (("0", 65536), ("T", 65537), ("C", 65538)):
+        _f = os.path.join(os.confstr(_key), "x")
+        check(f"read boundary: Read in the per-user folder {_name} -> deny",
+              decide(json.dumps({"tool_name": "Read", "cwd": PROJ,
+                                 "tool_input": {"file_path": _f}}), _ud)[0] == "deny")
+    check("read boundary: the per-user folders leave /tmp readable",
+          decide(json.dumps({"tool_name": "Read", "cwd": PROJ,
+                             "tool_input": {"file_path": "/tmp/x"}}), _ud)[0] == "silent")
 shutil.rmtree(BOUND)
 
 # --- decision log and shadow mode ----------------------------------------------------

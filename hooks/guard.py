@@ -153,7 +153,8 @@ def apply_policy(p):
     roots = rb.get("macos" if sys.platform == "darwin" else "linux") or []
     READ_DENY_ROOTS = tuple(r for r in (boundary_root(x) for x in roots) if r)
     READ_ALLOW = tuple(norm_path(x) for x in
-                       list(p["working_directories"]["paths"]) + p["sandbox"]["allow_read"])
+                       list(p["working_directories"]["paths"])
+                       + [y for y in (allow_root(x) for x in p["sandbox"]["allow_read"]) if y])
     READ_ALLOW_FILE_TOOLS = READ_ALLOW + tuple(
         norm_path(x) for x in rb.get("file_tools_extra") or [])
 
@@ -187,20 +188,39 @@ def norm_path(path, base=""):
     return p.casefold() if FOLD else p
 
 
+# The per-user folders of all apps under /private/var/folders/<id>/; build.py carries the
+# same table.
+DARWIN_USER_DIRS = {
+    "@darwin_user_dir": 65536,        # _CS_DARWIN_USER_DIR, .../0
+    "@darwin_user_temp_dir": 65537,   # _CS_DARWIN_USER_TEMP_DIR, .../T
+    "@darwin_user_cache_dir": 65538,  # _CS_DARWIN_USER_CACHE_DIR, .../C
+}
+
+
 def boundary_root(entry):
-    if entry == "@darwin_user_cache_dir":
+    if entry in DARWIN_USER_DIRS:
         if sys.platform != "darwin":
             return None
         try:
-            d = os.confstr(65538)  # _CS_DARWIN_USER_CACHE_DIR
+            d = os.confstr(DARWIN_USER_DIRS[entry])
         except (ValueError, OSError):
             d = None
         if not d:
-            raise ValueError("per-user cache folder unknown")  # fail closed
+            raise ValueError("per-user folder unknown: " + entry)  # fail closed
         return norm_path(d)
     if entry.startswith("@"):
         raise ValueError("unknown placeholder " + entry)
     return norm_path(entry)
+
+
+def allow_root(entry):
+    """An allow_read entry; a leading per-user placeholder is expanded like build.py
+    does (@darwin_user_temp_dir/xcrun_db), None off macOS. Unknown: ValueError."""
+    if not entry.startswith("@"):
+        return entry
+    name, _, rest = entry.partition("/")
+    root = boundary_root(name)
+    return (os.path.join(root, rest) if rest else root) if root else None
 
 
 def under(p, pattern):

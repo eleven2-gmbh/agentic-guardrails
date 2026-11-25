@@ -176,8 +176,12 @@ and the question that follows skips auto mode: in a measured session 23 of 38 co
 asked, none of them reached foreign data, and the questions were confirmed unread. So the
 boundary moved into the operating system:
 
-- `read_boundary.macos` (`/Users`, `/Volumes`, the per-user cache folder of all apps)
-  becomes the sandbox's `denyRead`; on Linux `/home`, `/mnt`, `/media`. Inside, only the
+- `read_boundary.macos` (`/Users`, `/Volumes`, and the per-user data, temporary and cache
+  folders of all apps, `/private/var/folders/<id>/0`, `T` and `C`; `T` added in v1.1.4
+  after it turned out readable, it holds other apps' temporary files) becomes the
+  sandbox's `denyRead`. In `T` only `xcrun_db` stays readable (`allow_read`
+  `@darwin_user_temp_dir/xcrun_db`): the tool cache of the Xcode shims `/usr/bin/python3`
+  and `/usr/bin/git`; without it every call started xcodebuild (1.7 s, EPERM on stderr); on Linux `/home`, `/mnt`, `/media`. Inside, only the
   working directories and `sandbox.allow_read` are readable (`allowRead`). Everything
   else in the home folder is hidden: other projects, `~/Downloads`, `~/Desktop`,
   `~/Library` beyond the caches, `~/.config` beyond git, `~/.claude` beyond the shell
@@ -196,6 +200,11 @@ boundary moved into the operating system:
   tools reach Claude's own memory, skills and plans, not the transcripts of other sessions.
 - git network commands and `gh` run outside the sandbox (4). On a command line with one
   of them, a substitution (`$(…)`, `` `…` ``, `<(…)`) or a path behind the boundary asks.
+  Claude Code leaves the sandbox only when the whole line matches `excludedCommands`
+  (tested 2026-11-25): `gh --version` alone ran outside, while
+  `gh --version; python3 -c "open(<canary>)"` and `gh … | head` ran entirely inside, and
+  `gh` there could not read its own configuration. A program after `gh` on the same line
+  therefore stays behind the boundary, even where the hook does not see its path.
 - `credentials` and `read_deny` stay as a second layer where no allowed path covers them.
 - `build.py --selftest` checks the boundary after every Claude Code update: in the user's
   terminal it lays out canary files (random text, no secret) in hidden folders, run by

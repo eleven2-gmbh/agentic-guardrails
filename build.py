@@ -155,7 +155,9 @@ HELP = {
                            "scan root. Read only by the script, not by the hook.",
     "sandbox.allow_read": "Paths inside the read boundary that commands in the sandbox may read "
                           "(package caches, single config files). A leading ~ is your home "
-                          "folder. Never a folder that can hold tokens.",
+                          "folder, a leading @darwin_user_temp_dir (or another per-user "
+                          "placeholder of read boundary macos) that folder. Never a folder "
+                          "that can hold tokens.",
     "sandbox.allow_write": "Extra paths commands in the sandbox may write (e.g. package caches).",
     "sandbox.allow_unix_sockets": "Unix sockets the sandbox may connect to, e.g. the ssh-agent "
                                   "socket.",
@@ -165,8 +167,9 @@ HELP = {
                                             "(access and mail logs); reading one asks first.",
     "read_boundary.macos": "Folders (macOS) where reading ends: inside them commands in the "
                            "sandbox and Read, Grep, Glob only reach the working directories "
-                           "and the allow_read paths. @darwin_user_cache_dir is the per-user "
-                           "cache folder of all apps.",
+                           "and the allow_read paths. @darwin_user_dir, @darwin_user_temp_dir "
+                           "and @darwin_user_cache_dir are the per-user data, temporary and "
+                           "cache folders of all apps (/private/var/folders/<id>/0, T, C).",
     "read_boundary.linux": "Folders (Linux) where reading ends, like read boundary macos. "
                            "Generated, not yet tested on Linux.",
     "read_boundary.file_tools_extra": "Further paths inside the read boundary that only Read, "
@@ -674,13 +677,44 @@ def auto_mode_environment(p):
     ]
 
 
-def darwin_user_cache_dir():
-    """/private/var/folders/<id>/C of the building user, None when unknown."""
+# The per-user folders of all apps under /private/var/folders/<id>/ (getconf DARWIN_USER_*):
+# 0 holds the apps' and services' data, T their temporary files, C their caches.
+# hooks/guard.py carries the same table.
+DARWIN_USER_DIRS = {
+    "@darwin_user_dir": 65536,        # _CS_DARWIN_USER_DIR, .../0
+    "@darwin_user_temp_dir": 65537,   # _CS_DARWIN_USER_TEMP_DIR, .../T
+    "@darwin_user_cache_dir": 65538,  # _CS_DARWIN_USER_CACHE_DIR, .../C
+}
+
+
+def darwin_user_dir(name):
+    """The per-user folder behind a placeholder for the building user, None when unknown."""
     try:
-        d = os.confstr(65538)  # _CS_DARWIN_USER_CACHE_DIR
+        d = os.confstr(DARWIN_USER_DIRS[name])
     except (ValueError, OSError):
         d = None
     return os.path.realpath(d) if d else None
+
+
+def allow_read(p, system=None):
+    """sandbox.allow_read with a leading per-user placeholder expanded
+    (@darwin_user_temp_dir/xcrun_db); such an entry is dropped off macOS.
+    hooks/guard.py resolves the same list the same way."""
+    system = system or sys.platform
+    out = []
+    for entry in p["sandbox"]["allow_read"]:
+        if entry.startswith("@"):
+            name, _, rest = entry.partition("/")
+            if name not in DARWIN_USER_DIRS:
+                raise LayerError("sandbox.allow_read: unknown placeholder {}".format(name))
+            if system != "darwin":
+                continue
+            d = darwin_user_dir(name)
+            if not d:
+                continue
+            entry = os.path.join(d, rest) if rest else d
+        out.append(entry)
+    return out
 
 
 def read_boundary(p, system=None):
@@ -690,8 +724,8 @@ def read_boundary(p, system=None):
     rb = p["read_boundary"]
     out = []
     for entry in rb["macos"] if system == "darwin" else rb["linux"]:
-        if entry == "@darwin_user_cache_dir":
-            entry = darwin_user_cache_dir() if system == "darwin" else None
+        if entry in DARWIN_USER_DIRS:
+            entry = darwin_user_dir(entry) if system == "darwin" else None
         elif entry.startswith("@"):
             raise LayerError("read_boundary: unknown placeholder {}".format(entry))
         if entry:
@@ -749,7 +783,7 @@ def build(p, system=None):
                 # absolute paths only, no ".": it could follow a cd (design notes, 12)
                 "allowRead": dedup([os.path.expanduser(d)
                                     for d in p["working_directories"]["paths"]]
-                                   + p["sandbox"]["allow_read"]),
+                                   + allow_read(p, system)),
                 "allowWrite": p["sandbox"]["allow_write"],
             },
             "credentials": {
@@ -942,9 +976,10 @@ def canary_dirs(p):
     home = os.path.expanduser("~")
     dirs = [os.path.join(home, x) for x in ("Downloads", "Documents", "Library", ".config",
                                             ".claude")]
-    if sys.platform == "darwin" and darwin_user_cache_dir():
-        dirs.append(darwin_user_cache_dir())
-    return [d for d in dirs if os.path.isdir(d)]
+    if sys.platform == "darwin":
+        dirs += [darwin_user_dir(x) for x in p["read_boundary"]["macos"]
+                 if x in DARWIN_USER_DIRS]
+    return [d for d in dirs if d and os.path.isdir(d)]
 
 
 def in_sandbox():
@@ -1071,7 +1106,7 @@ def selftest(p):
         if os.path.isdir(d):
             ok, why = readable(d)
             result("readable (working directory): " + d, ok, why)
-    for d in p["sandbox"]["allow_read"]:
+    for d in allow_read(p):
         d = os.path.expanduser(d)
         if os.path.exists(d):
             ok, why = readable(d)
@@ -1089,8 +1124,11 @@ def selftest(p):
         except OSError as e:
             result("write and read in $TMPDIR", False, e.strerror)
     import subprocess
-    for cmd in (["git", "config", "--global", "--get", "core.excludesfile"],
-                ["git", "log", "-1", "--format=%h"], ["npm", "config", "get", "registry"]):
+    # /usr/bin/python3 and /usr/bin/git are Xcode shims: without their cache in T
+    # (xcrun_db) every call starts xcodebuild and reports EPERM
+    shim = [["/usr/bin/python3", "-c", "pass"]] if sys.platform == "darwin" else []
+    for cmd in shim + [["git", "config", "--global", "--get", "core.excludesfile"],
+                       ["git", "log", "-1", "--format=%h"], ["npm", "config", "get", "registry"]]:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as e:
