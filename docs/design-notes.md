@@ -132,6 +132,12 @@ the file tools are not covered by it: the hook asks on every Edit or Write of
 a symlink), whatever the change. The SessionStart hook warns when the user settings carry
 `autoMode` entries of their own beyond `"$defaults"`.
 
+Every session also gets a short note from the SessionStart hook (model context only, no
+message to the user): the guardrails are active, the working directories and start roots
+from the policy, and that `/add-dir` or own settings do not open further folders; a new
+folder goes into `working_directories` and needs an install. Without it, sessions keep
+suggesting `/add-dir` for folders the locks keep closed.
+
 The drop-in directory `managed-settings.d/` is refused: Claude Code merges it into the
 managed settings with the later file winning for single values, without ids, locks or
 exceptions. The installer stops when it exists, and the SessionStart hook warns.

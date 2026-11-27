@@ -76,7 +76,6 @@ git network calls), with the command shortened and secrets redacted; a rule id l
 under shadow_rules only logs instead of asking. scripts/guard-log.py evaluates it.
 A log that cannot be written is ignored and never changes a decision.
 """
-import difflib
 import fnmatch
 import json
 import os
@@ -2528,7 +2527,30 @@ def session_start(data):
                     + ". The managed lock does not cover them; an allow entry can lift a "
                     "managed soft_deny. Please check they are yours (docs/design-notes.md, 11).")
     if msgs:
-        session_warn(" ".join(msgs))
+        session_warn(" ".join(msgs), session_context())
+    else:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                 "additionalContext": session_context()}}))
+
+
+def session_context():
+    """What every session should know about the guardrails, from the policy, so it does
+    not send the user after ways that cannot work here (/add-dir, own settings)."""
+    wd = POLICY.get("working_directories") or {}
+    paths = ", ".join(wd.get("paths") or []) or "none"
+    roots = ", ".join(wd.get("roots") or [])
+    return ("Security guardrails (agentic-guardrails) are active on this machine: managed "
+            "settings, a PreToolUse hook and the sandbox decide which folders, hosts and "
+            "commands this session may use. Working directories: " + paths + "."
+            + (" A session may also start in a git checkout below: " + roots + "."
+               if roots else "")
+            + " Folders outside them are closed on purpose; /add-dir, project or user "
+            "settings and \"don't ask again\" do not open them, so do not suggest those. "
+            "If the work needs another folder, tell the user to add it to "
+            "working_directories in the guardrails configuration (the machine layer "
+            "local.<host>.json), then run build.py --config and install.sh, and restart "
+            "the session. When the hook denies or asks, follow its reason and do not look "
+            "for a way around it.")
 
 
 def user_auto_mode_entries():
@@ -2562,13 +2584,14 @@ def user_auto_mode_entries():
     return out
 
 
-def session_warn(msg):
+def session_warn(msg, context=""):
     print(json.dumps({
         "systemMessage": "Security hook: " + msg,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": "Security hook: " + msg + " Point this out to the user at the start "
-                                 "and rely on the settings named here only after they confirm.",
+            "additionalContext": (context + " " if context else "") + "Security hook: " + msg
+                                 + " Point this out to the user at the start and rely on the "
+                                 "settings named here only after they confirm.",
         },
     }))
 

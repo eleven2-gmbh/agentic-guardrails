@@ -1,4 +1,5 @@
 """Unit test for hooks/guard.py. Run: /usr/bin/python3 -I tests/test_guard.py"""
+import concurrent.futures
 import json
 import os
 import shutil
@@ -655,13 +656,27 @@ def expect(cmd, want, works):
     return "deny" if want == "deny" or "sfw" in cmd else want
 
 
+# The table cases below are independent of each other and change no state the others
+# read, so they are collected first and decided in parallel (one hook process each, as in
+# Claude Code); the results are reported in order.
+JOBS = []
+
+
 def run(label, payload, want, policy=None):
+    JOBS.append((label, json.dumps(payload), want, policy))
+
+
+def run_jobs():
     global fails
-    got, why = decide(json.dumps(payload), policy)
-    ok = got == want
-    fails += not ok
-    if verbose or not ok:
-        print(f"{'ok  ' if ok else 'FAIL'} {label[:70]:70} -> {got}" + ("" if ok else f"  ({why})"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        results = list(pool.map(lambda j: decide(j[1], j[3]), JOBS))
+    for (label, _, want, _), (got, why) in zip(JOBS, results):
+        ok = got == want
+        fails += not ok
+        if verbose or not ok:
+            print(f"{'ok  ' if ok else 'FAIL'} {label[:70]:70} -> {got}"
+                  + ("" if ok else f"  ({why})"))
+    JOBS.clear()
 
 
 for works, policy in ((WORKS, POLICY), (not WORKS, FLIPPED)):
@@ -681,6 +696,9 @@ for tool, inp, want in SETTINGS:
 for cmd, want in SETTINGS_BASH:
     run(f"Bash {cmd[-60:]}", {"tool_name": "Bash", "cwd": G_A, "tool_input": {"command": cmd}},
         want)
+run_jobs()
+
+
 def session_run(cwd):
     return subprocess.run([sys.executable, "-I", GUARD, "--policy", POLICY],
                           capture_output=True, text=True, env=SESSION_ENV,
@@ -707,7 +725,7 @@ for obj, warn in USER_AUTO:
         with open(USER_FILE, "w") as f:
             json.dump(obj, f)
     out = session_run(G_A)
-    msg = json.loads(out)["systemMessage"] if out else ""
+    msg = json.loads(out).get("systemMessage", "") if out else ""
     got = "auto-mode rules" in msg
     fails += got != warn
     if verbose or got != warn:
@@ -978,7 +996,10 @@ def session_output(dropin):
 
 
 DROPIN = os.path.join(PROJ, "managed-settings.d")
-check("drop-in directory absent -> no warning", session_output(DROPIN) == "")
+out = session_output(DROPIN)
+check("drop-in directory absent -> no warning, only the context note",
+      "systemMessage" not in json.loads(out)
+      and "guardrails" in json.loads(out)["hookSpecificOutput"]["additionalContext"])
 os.makedirs(DROPIN)
 out = session_output(DROPIN)
 check("drop-in directory present -> one warning (one JSON object)",
@@ -989,6 +1010,12 @@ out = session_output(DROPIN)
 msg = json.loads(out)["systemMessage"] if out.count("\n") == 0 else ""
 check("drop-in and foreign folder -> both in one warning",
       "managed-settings.d" in msg and "/nonexistent/outside" in msg)
+
+# every session learns from the policy where it may work, so it does not suggest /add-dir
+_ctx = json.loads(session_run(PROJ))
+_note = _ctx["hookSpecificOutput"]["additionalContext"]
+check("SessionStart: context note names the working directories and /add-dir",
+      WORK_A in _note and WORK_B in _note and "/add-dir" in _note)
 
 shutil.rmtree(PROJ)
 shutil.rmtree(WORK_A)
