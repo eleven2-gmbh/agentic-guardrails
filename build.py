@@ -1044,6 +1044,16 @@ def selftest(p):
               "tested.\nNow let Claude Code run the same command (it runs in the sandbox), and "
               "ask it to open one canary\nwith the Read tool: the hook must refuse it.".format(made))
         return 0
+    # In the sandbox the current folder can be hidden: a cd into a project that is neither
+    # a working directory nor the start folder (design notes, 12). Say so instead of failing.
+    try:
+        cwd = os.path.realpath(os.getcwd())
+    except OSError:
+        print("FAIL  the current folder is hidden by the read boundary, so nothing was tested."
+              "\n      Run the self-test from a working directory, or start Claude Code in a "
+              "git checkout\n      below working_directories.roots and run it there "
+              "(design notes, 12).")
+        return 1
     fails = []
 
     def result(label, ok, detail=""):
@@ -1109,14 +1119,13 @@ def selftest(p):
         finally:
             if os.path.lexists(link):
                 os.unlink(link)
-        here = os.getcwd()
         try:
             os.chdir(os.path.dirname(c))
             ok, why = readable(CANARY)
         except OSError as e:
             ok, why = False, e.strerror
         finally:
-            os.chdir(here)
+            os.chdir(cwd)
         result("hidden (relative after cd): " + c, not ok, why)
     for d in ("/Volumes", os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")):
         if os.path.isdir(d):
@@ -1136,11 +1145,10 @@ def selftest(p):
             result("readable (allow_read): " + d, ok, why)
     # "." opens the start folder; run from a checkout below a root that is not a working
     # directory, this shows that Claude Code still resolves it that way (design notes, 12)
-    here = os.path.realpath(os.getcwd())
     if "." in (((ms.get("sandbox") or {}).get("filesystem") or {}).get("allowRead") or []) \
-            and any(here.startswith(r + "/") for r in start_roots(p)):
-        ok, why = readable(here)
-        result("readable (start folder, \".\"): " + here, ok, why)
+            and any(cwd.startswith(r + "/") for r in start_roots(p)):
+        ok, why = readable(cwd)
+        result("readable (start folder, \".\"): " + cwd, ok, why)
     tmp = os.environ.get("TMPDIR") or ""
     if tmp:
         f = os.path.join(tmp, "agr-selftest.txt")
