@@ -79,6 +79,7 @@ ADD_LISTS = {
     "domains.own", "domains.package_registries", "domains.security_sources",
     "domains.code_hosts", "domains.os_packages", "domains.documentation",
     "webfetch.extra_hosts", "ssh.hosts", "working_directories.paths",
+    "working_directories.roots",
     "patch_scan.projects", "sandbox.allow_read", "sandbox.allow_write",
     "sandbox.allow_unix_sockets", "read_boundary.file_tools_extra", "mcp.allowed_servers",
 }
@@ -151,6 +152,11 @@ HELP = {
                  "is free, every change asks. Add new servers to known_hosts as well.",
     "working_directories.paths": "Folders Claude Code may read and write (additionalDirectories). "
                                  "git network commands run there without a question.",
+    "working_directories.roots": "Folders (inside your home folder) whose git checkouts "
+                                 "Claude Code may read when a session starts in one: the "
+                                 "sandbox opens the start folder (\".\"). A session that "
+                                 "starts elsewhere inside the read boundary gets no shell "
+                                 "commands. Empty: only the working directories.",
     "patch_scan.projects": "Projects /patch-check scans for outdated packages, relative to patch "
                            "scan root. Read only by the script, not by the hook.",
     "sandbox.allow_read": "Paths inside the read boundary that commands in the sandbox may read "
@@ -733,6 +739,21 @@ def read_boundary(p, system=None):
     return dedup(out)
 
 
+def start_roots(p):
+    """working_directories.roots, expanded. Each must lie strictly inside the home
+    folder: a root at ~ or above would let a checkout of the home folder itself (dotfiles)
+    open the credentials next to it (design notes, 12)."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    out = []
+    for r in p["working_directories"].get("roots") or []:
+        d = os.path.realpath(os.path.expanduser(r))
+        if not d.startswith(home.rstrip("/") + "/"):
+            raise LayerError("working_directories.roots: {} must lie inside the home "
+                             "folder, below it".format(r))
+        out.append(d)
+    return out
+
+
 def build(p, system=None):
     cred = p["credentials"]
     aa = p["always_ask"]
@@ -780,10 +801,12 @@ def build(p, system=None):
             "filesystem": {
                 "allowManagedReadPathsOnly": lock,
                 "denyRead": read_boundary(p, system),
-                # absolute paths only, no ".": it could follow a cd (design notes, 12)
+                # "." is the folder the session started in; only with start roots,
+                # whose rule the hook enforces (design notes, 12)
                 "allowRead": dedup([os.path.expanduser(d)
                                     for d in p["working_directories"]["paths"]]
-                                   + allow_read(p, system)),
+                                   + allow_read(p, system)
+                                   + (["."] if start_roots(p) else [])),
                 "allowWrite": p["sandbox"]["allow_write"],
             },
             "credentials": {
@@ -1111,6 +1134,13 @@ def selftest(p):
         if os.path.exists(d):
             ok, why = readable(d)
             result("readable (allow_read): " + d, ok, why)
+    # "." opens the start folder; run from a checkout below a root that is not a working
+    # directory, this shows that Claude Code still resolves it that way (design notes, 12)
+    here = os.path.realpath(os.getcwd())
+    if "." in (((ms.get("sandbox") or {}).get("filesystem") or {}).get("allowRead") or []) \
+            and any(here.startswith(r + "/") for r in start_roots(p)):
+        ok, why = readable(here)
+        result("readable (start folder, \".\"): " + here, ok, why)
     tmp = os.environ.get("TMPDIR") or ""
     if tmp:
         f = os.path.join(tmp, "agr-selftest.txt")

@@ -413,6 +413,25 @@ check("allowRead: working directories first, absolute, no '.'",
 check("allowRead: no folder that holds tokens",
       not {"~/.npmrc", "~/.composer", "~/.config/git", "~/.bashrc", "~/.profile",
            "~/.bash_profile"} & set(fs["allowRead"]))
+# start roots: "." only with roots, and a root must lie strictly below the home folder
+p, err = merged(local_changes={"add": {"working_directories.roots": ["~/Documents"]}})
+check("roots: '.' joins allowRead, once, after the absolute paths " + (err or ""),
+      p is not None and build.build(p, "darwin")["sandbox"]["filesystem"]["allowRead"]
+      .count(".") == 1 and build.build(p, "darwin")["sandbox"]["filesystem"]["allowRead"][-1] == ".")
+check("roots: the policy carries them for the hook",
+      p is not None and p["working_directories"]["roots"] == ["~/Documents"])
+check("roots: the baseline has none", P0["working_directories"]["roots"] == [])
+for root in ("~", "~/", "/", "/tmp", os.path.dirname(os.path.realpath(os.path.expanduser("~"))),
+             "~/../x"):
+    p, err = merged(local_changes={"add": {"working_directories.roots": [root]}})
+    try:
+        build.build(p, "darwin") if p is not None else None
+        stopped = p is None and "roots" in (err or "")
+    except build.LayerError as e:
+        stopped = "must lie inside the home folder" in str(e)
+    check(f"roots: {root} stops the build", stopped)
+p, err = merged(local_changes={"tighten": {"working_directories.roots": ["~/Documents"]}})
+check("roots: not through tighten", p is None)
 check("the hook also sees Read, Grep and Glob",
       all(t in ms["hooks"]["PreToolUse"][0]["matcher"].split("|") for t in ("Read", "Grep", "Glob")))
 check("allowedMcpServers absent while restrict_servers is off", "allowedMcpServers" not in ms)

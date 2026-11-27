@@ -127,9 +127,13 @@
       "note": [
         "Become managed additionalDirectories (design notes, 9). guard.py uses the list",
         "to decide where a git network command may run without a question (design notes, 4):",
-        "those commands run outside the sandbox, and Claude's temp folders are not on it."
+        "those commands run outside the sandbox, and Claude's temp folders are not on it.",
+        "roots: folders inside the home folder whose git checkouts the sandbox opens when a",
+        "session starts in one (\".\" in allowRead); elsewhere inside the read boundary the",
+        "hook denies shell commands (design notes, 12). Empty: only the paths above."
       ],
-      "paths": []
+      "paths": [],
+      "roots": []
     },
     "patch_scan": {
       "note": [

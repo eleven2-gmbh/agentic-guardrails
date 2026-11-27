@@ -186,9 +186,23 @@ boundary moved into the operating system:
   else in the home folder is hidden: other projects, `~/Downloads`, `~/Desktop`,
   `~/Library` beyond the caches, `~/.config` beyond git, `~/.claude` beyond the shell
   snapshots, shell histories, other users, external disks.
-- The working directories are written as absolute paths, never `.`: resolved per
-  command, `.` could follow a `cd` out of the project. A repository that is not in
-  `working_directories` is not readable in the sandbox; it has to be added.
+- The working directories are written as absolute paths. A repository that is not in
+  `working_directories` is not readable in the sandbox; it has to be added, or it lies
+  below a start root.
+- Start roots (`working_directories.roots`, added 2026-11-27): with at least one root,
+  `build.py` adds `.` to `allowRead`. Claude Code resolves `.` to the folder the session
+  started in, and a later `cd` does not move it (measured 2026-11-27). So any git checkout
+  below a root (say `~/Documents`) can be opened by starting Claude Code in it, without
+  listing every project. The hook keeps `.` to one project: when the start folder lies
+  inside the boundary and is neither a git checkout strictly below a root, nor a working
+  directory, nor an `allow_read` path, every shell command is denied and SessionStart says
+  so (`~`, `~/Documents`, a folder of many projects). The start folder is
+  `CLAUDE_PROJECT_DIR`, and only when it names the transcript's project folder, which Claude
+  Code chooses itself; otherwise shell commands are denied too. Read and Grep may read the
+  start checkout like the sandbox; other checkouts below the root stay hidden from them. A
+  root must lie strictly inside the home folder: at `~` or above, a checkout of the home
+  folder itself (dotfiles) would open the credentials next to it. `--selftest`, run from a
+  checkout below a root, shows that `.` still resolves this way after an update.
 - `allow_read` holds single files and caches, never a folder that can hold tokens
   (`~/.npmrc`, `~/.composer`, `~/.config/git`, the shell rc files). A deny inside an allowed
   folder is not relied on: the sandbox knows only "deny, allow within deny".

@@ -126,7 +126,7 @@ def apply_policy(p):
     """Put the values from policy.json into the module's globals."""
     global REQUIRE_SFW, SFW_WORKS_IN_SANDBOX, WEBFETCH_FREE, WEBFETCH_FREE_SUFFIXES
     global REMOTE_OWN_SUFFIXES, SECRET_FILE, PERSONAL_FILE, GIT_WORK_ROOTS, POLICY
-    global READ_DENY_ROOTS, READ_ALLOW, READ_ALLOW_FILE_TOOLS
+    global READ_DENY_ROOTS, READ_ALLOW, READ_ALLOW_FILE_TOOLS, START_ROOTS
     POLICY = p
     pp = p["package_protection"]
     REQUIRE_SFW = bool(pp["require_sfw"])
@@ -157,6 +157,7 @@ def apply_policy(p):
                        + [y for y in (allow_root(x) for x in p["sandbox"]["allow_read"]) if y])
     READ_ALLOW_FILE_TOOLS = READ_ALLOW + tuple(
         norm_path(x) for x in rb.get("file_tools_extra") or [])
+    START_ROOTS = tuple(norm_path(x) for x in p["working_directories"].get("roots") or [])
 
 
 def compile_patterns(entry):
@@ -240,6 +241,91 @@ def outside_read_boundary(path, base="", allow=None):
     if any(under(p, a) for a in (READ_ALLOW_FILE_TOOLS if allow is None else allow)):
         return None
     return p
+
+
+# The start folder (design notes, 12). With working_directories.roots, build.py puts "."
+# into the sandbox's allowRead, and Claude Code resolves it to the folder the session
+# started in; a later cd does not move it (measured 2026-11-27). So the start folder must
+# be one the boundary may open: a git checkout strictly below a root, a working
+# directory, an allow_read path, or a folder outside the boundary. Elsewhere (~,
+# ~/Documents, a folder of many projects) every shell command is denied.
+START_ROOTS = ()
+
+
+def project_slug(path):
+    """The folder name Claude Code gives a project under ~/.claude/projects."""
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
+
+
+def start_folder(data):
+    """The folder the session started in, or None when unknown. CLAUDE_PROJECT_DIR is
+    an environment variable that settings could change, so it counts only when it names
+    the project folder of the transcript, which Claude Code chooses itself."""
+    d = os.environ.get("CLAUDE_PROJECT_DIR") or ""
+    t = data.get("transcript_path") or ""
+    if not d or not t or not os.path.isabs(d):
+        return None
+    slug = os.path.basename(os.path.dirname(t))
+    if slug not in (project_slug(d), project_slug(os.path.realpath(d))):
+        return None
+    return d
+
+
+def in_checkout_below_root(path):
+    """path lies in a git checkout whose top folder lies strictly below a start root."""
+    p = norm_path(path)
+    for r in START_ROOTS:
+        if p == r or not within(p, r):
+            continue
+        cur = p
+        while cur != r:
+            if os.path.exists(os.path.join(cur, ".git")):
+                return True
+            cur = os.path.dirname(cur)
+    return False
+
+
+def start_folder_ok(path):
+    """'.' resolving to path opens nothing the read boundary is meant to hide."""
+    p = norm_path(path)
+    if not any(within(p, r) for r in READ_DENY_ROOTS):
+        return True
+    if any(under(p, a) for a in READ_ALLOW):
+        return True
+    return in_checkout_below_root(path)
+
+
+def start_folder_problem(data):
+    """Why the start folder may not be opened, or None when it may (or no roots are set)."""
+    if not START_ROOTS or not READ_DENY_ROOTS:
+        return None
+    d = start_folder(data)
+    if d is None:
+        return ("the folder this session started in is unknown (CLAUDE_PROJECT_DIR missing "
+                "or not matching the transcript)")
+    if not start_folder_ok(d):
+        return (f"this session started in {d}, which is neither a git checkout below "
+                "working_directories.roots nor a working directory")
+    return None
+
+
+def apply_start_folder(data):
+    """Read and Grep may read the start folder like the sandbox does."""
+    global READ_ALLOW_FILE_TOOLS
+    if not START_ROOTS or not READ_DENY_ROOTS:
+        return
+    d = start_folder(data)
+    if d and in_checkout_below_root(d):
+        READ_ALLOW_FILE_TOOLS = READ_ALLOW_FILE_TOOLS + (norm_path(d),)
+
+
+def check_start_folder(data):
+    problem = start_folder_problem(data)
+    if problem:
+        deny(f"Shell commands are blocked: {problem}. The sandbox opens the start folder "
+             "for reading (\".\"), so here it would open more than one project. Tell the "
+             "user in words; start Claude Code in a project folder, or add the folder to "
+             "working_directories (design notes, 12).", "read.start-folder")
 
 
 GLOB_CHARS = re.compile(r"[*?\[{]")
@@ -2431,6 +2517,11 @@ def session_start(data):
     if found:
         msgs.append("Project settings open folders outside the project: "
                     + " | ".join(found))
+    problem = start_folder_problem(data)
+    if problem:
+        msgs.append(f"Shell commands are blocked in this session: {problem}. Start Claude "
+                    "Code in a project folder, or add this folder to working_directories "
+                    "(docs/design-notes.md, 12).")
     auto = user_auto_mode_entries()
     if auto:
         msgs.append("User settings add their own auto-mode rules: " + " | ".join(auto)
@@ -2517,11 +2608,13 @@ def main():
         EVENT[0] = "SessionStart"
         session_start(data)
         return
+    apply_start_folder(data)
     tool = data.get("tool_name")
     inp = data.get("tool_input") or {}
     logged = ""
     if tool in SHELL_TOOLS:
         logged = shell_command(inp)
+        check_start_folder(data)
         check_bash(logged, data.get("cwd") or "")
     elif tool == "WebFetch":
         logged = inp.get("url", "")

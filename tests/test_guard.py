@@ -834,6 +834,74 @@ if sys.platform == "darwin":  # the per-user folders of all apps, 0, T and C
     check("read boundary: the per-user folders leave /tmp readable",
           decide(json.dumps({"tool_name": "Read", "cwd": PROJ,
                              "tool_input": {"file_path": "/tmp/x"}}), _ud)[0] == "silent")
+
+# --- start roots: "." opens the start folder, so it must be one checkout (design notes, 12)
+S_ROOT = os.path.join(BOUND, "Documents")
+S_PROJ, S_PROJ2, S_LOOSE = (os.path.join(S_ROOT, n) for n in ("proj", "proj2", "loose"))
+for d in (os.path.join(S_PROJ, ".git"), os.path.join(S_PROJ, "src"),
+          os.path.join(S_PROJ2, ".git"), S_LOOSE):
+    os.makedirs(d, exist_ok=True)
+_rs = json.load(open(RB))
+_rs["working_directories"]["roots"] = [S_ROOT]
+RS = os.path.join(PROJ, "policy_roots.json")
+with open(RS, "w") as f:
+    json.dump(_rs, f)
+
+
+def rs(tool, inp, start, slug=None, policy=RS, event=None):
+    """Decision with the session started in start (None: CLAUDE_PROJECT_DIR unset)."""
+    env = {k: v for k, v in (SESSION_ENV if event else os.environ).items()
+           if k != "CLAUDE_PROJECT_DIR"}
+    if start is not None:
+        env["CLAUDE_PROJECT_DIR"] = start
+    t = os.path.join(BOUND, "claude", "projects",
+                     slug or guard_slug(start or "/none"), "s.jsonl")
+    payload = {"tool_name": tool, "cwd": start or B_WORK, "tool_input": inp,
+               "transcript_path": t}
+    if event:
+        payload = {"hook_event_name": event, "cwd": start, "source": "startup",
+                   "transcript_path": t}
+    out = subprocess.run([sys.executable, "-I", GUARD, "--policy", policy], input=json.dumps(payload),
+                         capture_output=True, text=True, env=env).stdout.strip()
+    if event:
+        return json.loads(out).get("systemMessage", "") if out else ""
+    return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else "silent"
+
+
+def guard_slug(path):
+    return "".join(c if c.isalnum() and c.isascii() else "-" for c in path)
+
+
+_cat = {"command": "cat README.md"}
+STARTS = [
+    ("checkout below the root", "Bash", _cat, S_PROJ, None, "silent"),
+    ("subfolder of a checkout", "Bash", _cat, os.path.join(S_PROJ, "src"), None, "silent"),
+    ("the root itself", "Bash", _cat, S_ROOT, None, "deny"),
+    ("folder below the root, no checkout", "Bash", _cat, S_LOOSE, None, "deny"),
+    ("the folder above the root", "Bash", _cat, BOUND, None, "deny"),
+    ("a working directory", "Bash", _cat, B_WORK, None, "silent"),
+    ("an allow_read path", "Bash", _cat, B_ALLOWED, None, "silent"),
+    ("outside the boundary", "Bash", _cat, PROJ, None, "silent"),
+    ("CLAUDE_PROJECT_DIR unset", "Bash", _cat, None, None, "deny"),
+    ("CLAUDE_PROJECT_DIR not the transcript's project", "Bash", _cat, S_PROJ,
+     guard_slug(S_PROJ2), "deny"),
+    ("Read in the start checkout", "Read", {"file_path": os.path.join(S_PROJ, "a")}, S_PROJ,
+     None, "silent"),
+    ("Read in another checkout", "Read", {"file_path": os.path.join(S_PROJ2, "a")}, S_PROJ,
+     None, "deny"),
+    ("Read in a checkout, started in a working directory", "Read",
+     {"file_path": os.path.join(S_PROJ, "a")}, B_WORK, None, "deny"),
+    ("Grep over the root", "Grep", {"pattern": "x", "path": S_ROOT}, S_PROJ, None, "deny"),
+]
+for label, tool, inp, start, slug, want in STARTS:
+    got = rs(tool, inp, start, slug)
+    check(f"start roots: {label} -> {want} (got {got})", got == want)
+check("start roots: without roots a session in the root keeps its shell",
+      rs("Bash", _cat, S_ROOT, policy=RB) == "silent")
+check("start roots: SessionStart in the root warns",
+      "Shell commands are blocked" in rs(None, None, S_ROOT, event="SessionStart"))
+check("start roots: SessionStart in a checkout stays quiet about it",
+      "Shell commands are blocked" not in rs(None, None, S_PROJ, event="SessionStart"))
 shutil.rmtree(BOUND)
 
 # --- decision log and shadow mode ----------------------------------------------------

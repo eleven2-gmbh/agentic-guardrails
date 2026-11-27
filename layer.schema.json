@@ -269,6 +269,14 @@
             "minLength": 1
           },
           "description": "Folders Claude Code may read and write (additionalDirectories). git network commands run there without a question.\nBaseline: []"
+        },
+        "working_directories.roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Folders (inside your home folder) whose git checkouts Claude Code may read when a session starts in one: the sandbox opens the start folder (\".\"). A session that starts elsewhere inside the read boundary gets no shell commands. Empty: only the working directories.\nBaseline: []"
         }
       }
     },
