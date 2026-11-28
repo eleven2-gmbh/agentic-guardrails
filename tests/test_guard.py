@@ -1,5 +1,6 @@
 """Unit test for hooks/guard.py. Run: /usr/bin/python3 -I tests/test_guard.py"""
-import concurrent.futures
+import collections
+import io
 import json
 import os
 import shutil
@@ -511,9 +512,75 @@ WEB = [
 ]
 
 
+# One hook process per decision, as in Claude Code, but without paying ~80 ms of interpreter
+# start and module setup each time: guard.py is loaded once into a module nothing else
+# touches, and every decision runs in a fork of it, so it starts from exactly the state a
+# fresh `python3 -I guard.py` has after its imports (guard.py reads no environment at
+# import; os.environ and the cwd are the test's at fork time). GUARD_TEST_SUBPROCESS=1
+# runs every decision as a real subprocess instead, to compare.
+SUBPROCESS = os.environ.get("GUARD_TEST_SUBPROCESS") == "1"
+if not SUBPROCESS:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("guard_pristine", GUARD)
+    PRISTINE = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(PRISTINE)
+
+
+def start_decision(payload, policy=None):
+    """Start one decision; returns a handle for finish_decision."""
+    policy = policy or POLICY
+    if SUBPROCESS:
+        p = subprocess.Popen([sys.executable, "-I", GUARD, "--policy", policy],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True)
+        p.stdin.write(payload)
+        p.stdin.close()
+        return p
+    r, w = os.pipe()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:  # child: become `guard.py --policy POLICY < payload`
+        try:
+            os.close(r)
+            os.dup2(w, 1)
+            os.dup2(os.open(os.devnull, os.O_WRONLY), 2)
+            sys.argv = [GUARD, "--policy", policy]
+            sys.stdin = io.StringIO(payload)
+            try:
+                PRISTINE.run()
+            except SystemExit:
+                pass
+            sys.stdout.flush()
+        finally:
+            os._exit(0)
+    os.close(w)
+    return pid, r
+
+
+def finish_decision(handle):
+    if SUBPROCESS:
+        out = handle.stdout.read()
+        handle.wait()
+    else:
+        pid, r = handle
+        chunks = []
+        while True:
+            c = os.read(r, 65536)
+            if not c:
+                break
+            chunks.append(c)
+        os.close(r)
+        os.waitpid(pid, 0)
+        out = b"".join(chunks).decode()
+    return parse_decision(out.strip())
+
+
 def decide(payload, policy=None):
-    out = subprocess.run([sys.executable, "-I", GUARD, "--policy", policy or POLICY],
-                         input=payload, capture_output=True, text=True).stdout.strip()
+    return finish_decision(start_decision(payload, policy))
+
+
+def parse_decision(out):
     if not out:
         return "silent", ""
     h = json.loads(out)["hookSpecificOutput"]
@@ -668,8 +735,16 @@ def run(label, payload, want, policy=None):
 
 def run_jobs():
     global fails
-    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-        results = list(pool.map(lambda j: decide(j[1], j[3]), JOBS))
+    # a sliding window of cpu_count running decisions, collected in order
+    width = os.cpu_count() or 4
+    running = collections.deque()
+    results = []
+    for _, payload, _, policy in JOBS:
+        if len(running) >= width:
+            results.append(finish_decision(running.popleft()))
+        running.append(start_decision(payload, policy))
+    while running:
+        results.append(finish_decision(running.popleft()))
     for (label, _, want, _), (got, why) in zip(JOBS, results):
         ok = got == want
         fails += not ok

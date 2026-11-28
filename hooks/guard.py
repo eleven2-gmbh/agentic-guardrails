@@ -2654,7 +2654,8 @@ def main():
     emit(tool, logged)
 
 
-if __name__ == "__main__":
+def run():
+    """The hook as Claude Code calls it; tests/test_guard.py forks into this."""
     try:
         main()
     except SystemExit:
@@ -2667,3 +2668,7 @@ if __name__ == "__main__":
                     f"Security hook could not check the call ({type(e).__name__}).")]
         DENIES[:] = []
         emit("?", "")
+
+
+if __name__ == "__main__":
+    run()

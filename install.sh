@@ -94,9 +94,17 @@ mkdir -p "$HOME/Library/LaunchAgents"
 /bin/launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 mv "${TMPDIR:-/tmp}/ssh-agent-$STAMP.plist" "$PLIST"
 /bin/launchctl bootstrap "gui/$(id -u)" "$PLIST"
-sleep 2
-SSH_AUTH_SOCK="$HOME/.ssh-agent/agent.sock" /usr/bin/ssh-add -l >/dev/null \
-  && echo "    agent running, key loaded" || { echo "    ERROR: agent has no key"; exit 1; }
+# the agent loads the key from the login keychain, which can take longer than a moment;
+# wait up to 15 s for it instead of a fixed pause
+i=0
+until SSH_AUTH_SOCK="$HOME/.ssh-agent/agent.sock" /usr/bin/ssh-add -l >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -ge 30 ]; then
+    echo "    ERROR: agent has no key after 15 s (log: /tmp/$LABEL.log)"; exit 1
+  fi
+  sleep 0.5
+done
+echo "    agent running, key loaded"
 
 echo "4/7 ssh config block at the top of ~/.ssh/config"
 if grep -q '>>> Claude-Code-Sandbox' "$HOME/.ssh/config"; then
