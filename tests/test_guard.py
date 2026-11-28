@@ -134,6 +134,9 @@ BASH = [
     ("gh api repos/a/b -f title=x", "ask"),
     ("gh gist create f.txt", "ask"),
     ("gh repo delete a/b", "ask"),
+    ("glab mr view 12", "silent"),
+    ("glab mr create --fill", "ask"),
+    ("glab snippet create f.txt", "ask"),
     ("NO=1 gh issue create", "ask"),
     ("ls | grep push", "silent"),
     # wrappers: Claude Code strips these before matching its rules, so the hook must too

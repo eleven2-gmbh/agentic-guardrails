@@ -291,7 +291,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Further permission rules that always ask, e.g. Read(**/.env) or Bash(gh gist *).\nBaseline: [\"Read(**/.env)\", \"Read(**/.env.*)\", \"Bash(gh gist *)\"]"
+          "description": "Further permission rules that always ask, e.g. Read(**/.env) or Bash(gh gist *).\nBaseline: [\"Read(**/.env)\", \"Read(**/.env.*)\", \"Bash(gh gist *)\", \"Bash(glab snippet *)\"]"
         },
         "always_ask.tools": {
           "type": "array",
@@ -307,7 +307,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Environment variables the sandbox removes from every command.\nBaseline: [\"GITHUB_TOKEN\", \"GH_TOKEN\", \"GITLAB_TOKEN\", \"NPM_TOKEN\", \"HCLOUD_TOKEN\", \"AWS_ACCESS_KEY_ID\", \"AWS_SECRET_ACCESS_KEY\", \"AWS_SESSION_TOKEN\", \"INFLUX_TOKEN\", \"INFLUXDB_TOKEN\"]"
+          "description": "Environment variables the sandbox removes from every command.\nBaseline: [\"GITHUB_TOKEN\", \"GH_TOKEN\", \"GITLAB_TOKEN\", \"GITLAB_ACCESS_TOKEN\", \"NPM_TOKEN\", \"HCLOUD_TOKEN\", \"AWS_ACCESS_KEY_ID\", \"AWS_SECRET_ACCESS_KEY\", \"AWS_SESSION_TOKEN\", \"INFLUX_TOKEN\", \"INFLUXDB_TOKEN\"]"
         },
         "credentials.files": {
           "type": "array",
@@ -315,7 +315,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Files and folders the sandbox hides from every command.\nBaseline: [\"~/.ssh/id_ed25519\", \"~/.aws\", \"~/.azure\", \"~/.config/gh\", \"~/.config/hcloud\", \"~/.docker/config.json\", \"~/.kube\", \"~/.git-credentials\", \"~/.netrc\", \"~/Library/Keychains\", \"~/.composer/auth.json\", \"~/.config/git/credentials\", \"~/.npmrc\"]"
+          "description": "Files and folders the sandbox hides from every command.\nBaseline: [\"~/.ssh/id_ed25519\", \"~/.aws\", \"~/.azure\", \"~/.config/gh\", \"~/.config/glab-cli\", \"~/Library/Application Support/glab-cli\", \"~/.config/hcloud\", \"~/.docker/config.json\", \"~/.kube\", \"~/.git-credentials\", \"~/.netrc\", \"~/Library/Keychains\", \"~/.composer/auth.json\", \"~/.config/git/credentials\", \"~/.npmrc\"]"
         },
         "credentials.read_deny": {
           "type": "array",
@@ -323,7 +323,7 @@
             "type": "string",
             "minLength": 1
           },
-          "description": "Paths the Read tool is denied (permission rules Read(...)).\nBaseline: [\"~/.ssh/id_*\", \"~/.aws/**\", \"~/.azure/**\", \"~/.config/gh/**\", \"~/.config/hcloud/**\", \"~/.docker/config.json\", \"~/.kube/**\", \"~/.git-credentials\", \"~/.netrc\", \"~/Library/Keychains/**\", \"~/.composer/auth.json\", \"~/.config/git/credentials\", \"~/.npmrc\"]"
+          "description": "Paths the Read tool is denied (permission rules Read(...)).\nBaseline: [\"~/.ssh/id_*\", \"~/.aws/**\", \"~/.azure/**\", \"~/.config/gh/**\", \"~/.config/glab-cli/**\", \"~/Library/Application Support/glab-cli/**\", \"~/.config/hcloud/**\", \"~/.docker/config.json\", \"~/.kube/**\", \"~/.git-credentials\", \"~/.netrc\", \"~/Library/Keychains/**\", \"~/.composer/auth.json\", \"~/.config/git/credentials\", \"~/.npmrc\"]"
         },
         "data_classes.personal_files.patterns": {
           "type": "array",
@@ -454,6 +454,7 @@
             "type": "string",
             "examples": [
               "always_ask.extra_ask:Bash(gh gist *)",
+              "always_ask.extra_ask:Bash(glab snippet *)",
               "always_ask.extra_ask:Read(**/.env)",
               "always_ask.extra_ask:Read(**/.env.*)",
               "always_ask.tools:aws",
@@ -469,6 +470,7 @@
               "credentials.env_vars:AWS_SESSION_TOKEN",
               "credentials.env_vars:GH_TOKEN",
               "credentials.env_vars:GITHUB_TOKEN",
+              "credentials.env_vars:GITLAB_ACCESS_TOKEN",
               "credentials.env_vars:GITLAB_TOKEN",
               "credentials.env_vars:HCLOUD_TOKEN",
               "credentials.env_vars:INFLUXDB_TOKEN",
@@ -479,6 +481,7 @@
               "credentials.files:~/.composer/auth.json",
               "credentials.files:~/.config/gh",
               "credentials.files:~/.config/git/credentials",
+              "credentials.files:~/.config/glab-cli",
               "credentials.files:~/.config/hcloud",
               "credentials.files:~/.docker/config.json",
               "credentials.files:~/.git-credentials",
@@ -486,18 +489,21 @@
               "credentials.files:~/.netrc",
               "credentials.files:~/.npmrc",
               "credentials.files:~/.ssh/id_ed25519",
+              "credentials.files:~/Library/Application Support/glab-cli",
               "credentials.files:~/Library/Keychains",
               "credentials.read_deny:~/.aws/**",
               "credentials.read_deny:~/.azure/**",
               "credentials.read_deny:~/.composer/auth.json",
               "credentials.read_deny:~/.config/gh/**",
               "credentials.read_deny:~/.config/git/credentials",
+              "credentials.read_deny:~/.config/glab-cli/**",
               "credentials.read_deny:~/.config/hcloud/**",
               "credentials.read_deny:~/.docker/config.json",
               "credentials.read_deny:~/.git-credentials",
               "credentials.read_deny:~/.kube/**",
               "credentials.read_deny:~/.netrc",
               "credentials.read_deny:~/.npmrc",
+              "credentials.read_deny:~/Library/Application Support/glab-cli/**",
               "credentials.read_deny:~/Library/Keychains/**",
               "domains.code_hosts:api.github.com",
               "domains.code_hosts:codeload.github.com",

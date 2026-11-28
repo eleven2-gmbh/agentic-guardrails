@@ -259,6 +259,8 @@
         "~/.aws",
         "~/.azure",
         "~/.config/gh",
+        "~/.config/glab-cli",
+        "~/Library/Application Support/glab-cli",
         "~/.config/hcloud",
         "~/.docker/config.json",
         "~/.kube",
@@ -274,6 +276,8 @@
         "~/.aws/**",
         "~/.azure/**",
         "~/.config/gh/**",
+        "~/.config/glab-cli/**",
+        "~/Library/Application Support/glab-cli/**",
         "~/.config/hcloud/**",
         "~/.docker/config.json",
         "~/.kube/**",
@@ -288,6 +292,7 @@
         "GITHUB_TOKEN",
         "GH_TOKEN",
         "GITLAB_TOKEN",
+        "GITLAB_ACCESS_TOKEN",
         "NPM_TOKEN",
         "HCLOUD_TOKEN",
         "AWS_ACCESS_KEY_ID",
@@ -315,7 +320,8 @@
       "extra_ask": [
         "Read(**/.env)",
         "Read(**/.env.*)",
-        "Bash(gh gist *)"
+        "Bash(gh gist *)",
+        "Bash(glab snippet *)"
       ],
       "git_network_outside_sandbox": [
         "git push",

@@ -761,7 +761,7 @@ def build(p, system=None):
     excluded = ([g for cmd in aa["git_network_outside_sandbox"]
                  for g in ((cmd, cmd + " *") if cmd in ("git push", "git pull", "git fetch")
                            else (cmd + " *",))]
-                + (["gh *"] if aa.get("gh_outside_sandbox") else [])
+                + (["gh *", "glab *"] if aa.get("gh_outside_sandbox") else [])
                 + ["{} *".format(t) for t in aa["tools"]])
     cc = p["claude_code"]
     lock = bool(cc["lock_lower_scopes"])

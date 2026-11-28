@@ -218,7 +218,8 @@ boundary moved into the operating system:
   all of these by itself, tested 2026-11-25). A Glob pattern is checked from its literal
   start; `..` after a wildcard is denied. `read_boundary.file_tools_extra` lets the file
   tools reach Claude's own memory, skills and plans, not the transcripts of other sessions.
-- git network commands and `gh` run outside the sandbox (4). On a command line with one
+- git network commands, `gh` and `glab` run outside the sandbox (4; `gh_outside_sandbox`
+  covers both). On a command line with one
   of them, a substitution (`$(…)`, `` `…` ``, `<(…)`) or a path behind the boundary asks.
   Claude Code leaves the sandbox only when the whole line matches `excludedCommands`
   (tested 2026-11-25): `gh --version` alone ran outside, while
